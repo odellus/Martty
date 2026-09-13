@@ -329,6 +329,11 @@ pub fn is_auth_required_error(err: &AcpError) -> bool {
     if err.code == ErrorCode::AuthRequired || i32::from(err.code) == ACP_AUTH_REQUIRED_CODE {
         return true;
     }
+    if err.data.as_ref().and_then(|data| data.get("errorKind")).and_then(Value::as_str)
+        == Some("authentication_failed")
+    {
+        return true;
+    }
     is_auth_failure_message(&acp_error_message(err))
 }
 

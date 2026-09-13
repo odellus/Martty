@@ -824,6 +824,7 @@ pub struct SubagentView {
 /// never show another session's chrome on this session's tab.
 pub struct SessionSlot {
     pub id: String,
+    pub connection: Option<crate::bus::SessionConnection>,
     pub title: Option<String>,
     pub transcript: Transcript,
     /// Composer draft (text, cursor, per-tab recall history) rides with
@@ -898,6 +899,7 @@ impl SessionSlot {
         SessionSlot {
             transcript: Transcript::new(id.clone()),
             id,
+            connection: None,
             title: None,
             input: ComposerEditor::new(),
             pending_images: crate::attachments::Staged::default(),
@@ -1371,6 +1373,8 @@ pub struct App {
     /// True when the terminal speaks the kitty graphics protocol: image
     /// thumbnails and the background layer emit real pixels (set by `main`).
     pub pet_pixels: bool,
+    pub harness_badge: Option<crate::harness_badge::Badge>,
+    pub harness_thumb: Option<ThumbPlacement>,
     /// The pet sprite the frame just drew around: cell box + working flag.
     /// Filled by `ui::draw` (the layout math lives there — one source of
     /// truth), reconciled against the terminal by `main` after the frame.
@@ -1868,6 +1872,8 @@ impl App {
             show_banner: true,
             pet_visible: false,
             pet_pixels: false,
+            harness_badge: None,
+            harness_thumb: None,
             pet_want: None,
             git_branch: None,
             git_check_at: Instant::now(),
@@ -1986,6 +1992,11 @@ impl App {
         placeholder.locale = self.locale;
         SessionSlot {
             id: std::mem::take(&mut self.session_id),
+            connection: Some(crate::bus::SessionConnection {
+                server: self.server_info.clone(), auth: self.auth.clone(),
+                load_session: self.load_session, list_session: self.list_session,
+                resume_session: self.resume_session_cap,
+            }),
             title: self.session_title.take(),
             transcript: std::mem::replace(&mut self.transcript, placeholder),
             // Composer + chat chrome bound to the tab (see `put_live_slot`).
@@ -2036,6 +2047,13 @@ impl App {
     /// timer and state note.
     fn put_live_slot(&mut self, slot: SessionSlot) {
         self.session_id = slot.id;
+        self.set_session_connection(slot.connection.unwrap_or(crate::bus::SessionConnection {
+            server: None,
+            auth: crate::acp_auth::AuthSnapshot::none(),
+            load_session: false,
+            list_session: false,
+            resume_session: false,
+        }));
         self.session_title = slot.title;
         self.transcript = slot.transcript;
         self.queued = slot.prompt_queue.len();
@@ -3677,6 +3695,9 @@ impl App {
                                 matches!((snapshot.rev, current.rev), (Some(next), Some(previous)) if next <= previous)
                             });
                             if !stale {
+                                if snapshot.slot == "conversation.harness" {
+                                    self.harness_badge = crate::harness_badge::parse(&snapshot);
+                                }
                                 self.slot_snapshots.insert(snapshot.slot.clone(), snapshot);
                             }
                         }
@@ -3749,18 +3770,37 @@ impl App {
             }
             AppEvent::Ctl(ctl_ev) => {
                 match ctl_ev {
+                    CtlEvent::NewSessionRequested => self.new_session_flow("", ctl),
+                    CtlEvent::SessionBoundTo { previous_id, session_id, notice } => {
+                        self.awaiting_binds.retain(|entry| entry.id != previous_id);
+                        if self.session_id == previous_id || self.parked.iter().any(|slot| slot.id == previous_id) {
+                            self.awaiting_binds.push_front(AwaitingBind { id: previous_id, open: true });
+                            self.handle_inner(AppEvent::Ctl(CtlEvent::SessionBound { session_id, notice }), ctl);
+                        } else {
+                            ctl.send(Cmd::ForgetSession { session_id });
+                        }
+                    }
+                    CtlEvent::BindFailedTo { previous_id, message } => {
+                        self.awaiting_binds.retain(|entry| entry.id != previous_id);
+                        // A failed empty tab must show its error, not the welcome page.
+                        if self.session_id == previous_id {
+                            self.show_banner = false;
+                            self.show_tip(self.locale.tr("session creation failed · /new to retry", "会话创建失败 · /new 重试"));
+                        }
+                        else if let Some(slot) = self.parked.iter_mut().find(|slot| slot.id == previous_id) {
+                            slot.show_banner = false;
+                        }
+                        self.handle_inner(AppEvent::Ctl(CtlEvent::SessionError { session_id: previous_id, message }), ctl);
+                    }
+                    CtlEvent::SessionConnection { session_id, connection } => {
+                        if session_id == self.session_id {
+                            self.set_session_connection(connection);
+                        } else if let Some(slot) = self.parked.iter_mut().find(|slot| slot.id == session_id) {
+                            slot.connection = Some(connection);
+                        }
+                    },
                     CtlEvent::Starting { runtime } => {
                         self.connection_error = None;
-                        if runtime == "harness" {
-                            self.parked.clear();
-                            self.awaiting_binds.clear();
-                            self.startup_bound = false;
-                            self.reset_session_ui();
-                            self.show_banner = true;
-                            self.server_info = None;
-                            self.auth = crate::acp_auth::AuthSnapshot::none();
-                            self.session_id = "pending".into();
-                        }
                         self.state = RunState::Starting;
                         self.run_started = Some(Instant::now());
                         self.state_note = if runtime == "harness" {
@@ -4206,6 +4246,14 @@ impl App {
                     }
                     CtlEvent::TuiOpFailed(desc) => {
                         self.transcript.push_notice(NoticeLevel::Warn, desc);
+                    }
+                    CtlEvent::SessionAuth { session_id, snapshot, open } => {
+                        if session_id == self.session_id {
+                            self.handle_inner(AppEvent::Ctl(CtlEvent::Auth(snapshot)), ctl);
+                            if open { self.open_auth_surface(ctl); }
+                        } else if let Some(slot) = self.parked.iter_mut().find(|slot| slot.id == session_id) {
+                            if let Some(connection) = &mut slot.connection { connection.auth = snapshot; }
+                        }
                     }
                     CtlEvent::Auth(snap) => {
                         let retrying_prompt =
@@ -7261,7 +7309,7 @@ impl App {
     }
 
     /// The `/new` flow, shared by the slash command and the tab strip `+`
-    /// cell: park the live session and open a fresh tab (issue #94).
+    /// cell: reuse an empty tab, otherwise park the conversation in its tab.
     fn new_session_flow(&mut self, arg: &str, ctl: &Controller) {
         if self.demo {
             let id = if arg.is_empty() {
@@ -7269,7 +7317,7 @@ impl App {
             } else {
                 arg.to_string()
             };
-            self.open_new_session(id.clone(), true);
+            self.prepare_new_session(id.clone(), true, ctl);
             ctl.send(Cmd::FetchSkills {
                 session_id: self.session_id.clone(),
             });
@@ -7286,14 +7334,43 @@ impl App {
             // the same shape main.rs seeds the startup session with. The
             // real id lands on this tab via `awaiting_binds` at SessionBound.
             let placeholder = format!("dsh-{}", timestamp());
-            self.open_new_session(placeholder.clone(), false);
+            self.prepare_new_session(placeholder.clone(), false, ctl);
             self.awaiting_binds.push_back(AwaitingBind {
-                id: placeholder,
+                id: placeholder.clone(),
                 open: true,
             });
-            ctl.send(Cmd::NewSession);
+            ctl.send(Cmd::NewSession { requester: Some(placeholder), retry_auth: None });
             self.show_tip(self.locale.tr("session/new …", "正在创建会话（session/new）…"));
         }
+    }
+
+    fn prepare_new_session(&mut self, id: String, bound: bool, ctl: &Controller) {
+        let empty = !self.prompt_pending && self.state != RunState::Running
+            && self.prompt_queue.is_empty()
+            && self.transcript.cells.iter().all(|cell| matches!(cell.kind, crate::transcript::CellKind::Notice { .. }));
+        if !empty {
+            self.open_new_session(id, bound);
+            return;
+        }
+        let old = self.take_live_slot();
+        if !self.startup_bound && !old.session_bound
+            && !self.awaiting_binds.iter().any(|entry| entry.id == old.id)
+        {
+            self.startup_bound = true;
+            self.awaiting_binds.push_front(AwaitingBind { id: old.id.clone(), open: false });
+        }
+        // Keep outstanding bind requests in FIFO order, but discard their late results.
+        for awaiting in &mut self.awaiting_binds {
+            if awaiting.id == old.id { awaiting.open = false; }
+        }
+        ctl.send(Cmd::ForgetSession { session_id: old.id });
+        let mut fresh = SessionSlot::fresh(id, bound);
+        fresh.transcript.locale = self.locale;
+        fresh.input = old.input;
+        fresh.pending_images = old.pending_images;
+        fresh.input_expanded = old.input_expanded;
+        self.put_live_slot(fresh);
+        self.after_switch();
     }
 
     /// The `/close` flow (issue #94): stop viewing the current session tab
@@ -7378,6 +7455,14 @@ impl App {
                 &[label.clone(), bits.join(", ")],
             ));
         }
+    }
+
+    fn set_session_connection(&mut self, connection: crate::bus::SessionConnection) {
+        self.server_info = connection.server;
+        self.auth = connection.auth;
+        self.load_session = connection.load_session;
+        self.list_session = connection.list_session;
+        self.resume_session_cap = connection.resume_session;
     }
 
     fn reset_session_ui(&mut self) {

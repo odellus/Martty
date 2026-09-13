@@ -271,6 +271,7 @@ pub fn parse_snapshot(value: &Value) -> Result<Option<SlotSnapshot>, String> {
         "welcome.hero"
             | "welcome.info"
             | "chrome.right"
+            | "conversation.harness"
             | "conversation.input.dock"
             | "conversation.navigation.dock"
             | "conversation.composer.dock"

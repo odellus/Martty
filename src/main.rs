@@ -20,6 +20,7 @@ mod locale;
 mod logo;
 mod markdown;
 mod pet;
+mod harness_badge;
 mod proto;
 mod runtime;
 mod sessions;
@@ -544,6 +545,7 @@ fn main() -> Result<()> {
                         .images
                         .iter()
                         .chain(app.att_thumbs.iter())
+                        .chain(app.harness_thumb.iter())
                         .map(|t| pet::ThumbShot {
                             id: t.id,
                             rect: t.rect,

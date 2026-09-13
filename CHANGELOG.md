@@ -5,7 +5,16 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Route structured ACP authentication failures to the owning session’s authentication panel and retry parked requests after authentication; omit connection metadata from prompt error text.
+- Show DeepSeek’s icon from the installed Lobe SVG library when the ACP Registry has no entry, with offline rendering, versioned image caching and name fallback.
+
+- Selecting a Harness in an empty session switches directly in the current tab without the default-saved reminder.
+
 ### Added
+
+- Show the current tab’s Harness icon before the model, using Registry assets cached locally; fall back to its name while unavailable or on terminals without image support.
 
 - A Chinese and English workflow article on trying Codex and Claude Code in one
   terminal interface, with a concrete task handoff and explicit context/account boundaries.
@@ -15,15 +24,15 @@ All notable changes to this project are documented here. The project follows
   document Ctrl+Enter steering, Harness authentication, and tab navigation.
 - Harness management through `/harness` and `martty harness`: official ACP
   Registry discovery, local command detection, saved recipes, configuration-only
-  setup, explicit runtime switching, and confirmed configuration/private-installation
+  setup, default selection and new-session actions, and confirmed configuration/private-installation
   removal. Binary packages install into Martty-owned directories with SHA-256
   validation; shared caches, global programs, credentials and history are protected.
 - Registry pickers open from a bundled snapshot or validated local cache immediately,
   then probe asynchronously. Installed/configured and downloadable entries are grouped;
-  the current Harness stays first and cannot be selected again.
+  the default Harness stays first and can be selected again.
 - Background-capable downloads with progress, bounded diagnostics, cancellation,
-  completion notices and retry. Enter on completion uses the normal Harness switch
-  flow; Esc closes without switching. Removal dialogs support stepwise back navigation.
+  completion notices and retry. Enter on completion saves the default and opens a
+  new tab; Esc closes the panel. Removal dialogs support stepwise back navigation.
 - CLI and TUI walkthroughs, README quick starts and screenshots.
 - Plan progress uses an animated running marker and a distinct in-progress label.
 - Theme selection previews in both picker surfaces without confirming:
@@ -36,6 +45,16 @@ All notable changes to this project are documented here. The project follows
 
 ### Fixed
 
+- Isolate nested Harness runners from the outer `npm exec --package` / `--call` selection so local-package launches can start Codex and other npx Harnesses; replace stale session-creation progress after a failed start.
+
+- Decouple Harness defaults from session lifetimes: `/harness` saves
+  `defaultHarness`, and `/new` starts a session using that default, reusing an empty tab or opening a new tab after conversation activity. Enter
+  after selection and `/harness <id> --new` use the same new-tab flow. Existing
+  tabs retain their connection, history and settings; switching from an empty
+  or later tab no longer clears old tabs or crashes on the next `/new` (#117).
+- Isolate ACP requests, notifications, authentication and retries across Harness
+  connections, including colliding session and RPC ids. Failed new-session
+  requests retain their own tab and cannot take over another pending session.
 - The embedded ACP adapter moves to `@openma/deepseek-harness-acp` 0.4.31,
   which carries DSH 0.1.5-rc.1 with session write ownership and keeps ACP
   events and question routing intact in Web hosts. The development and CI
@@ -80,10 +99,6 @@ All notable changes to this project are documented here. The project follows
 - The model chip in the meta row now uses the same muted color as the reasoning
   effort label beside it, instead of the brand accent.
 - Website test modules no longer become public Astro routes that return HTTP 500.
-- Harness switching reinitializes ACP and starts a fresh empty session. All old
-  connection projections and requests are cleared, while session-scoped state
-  remains isolated across tabs within one connection. Saved configuration is
-  independent of authentication/readiness; the default changes only after readiness.
 - Authentication follows ACP responses, not browser completion or advertised
   methods. Pending, failed and successful login states are distinct; unknown
   credential sources are not labeled as API keys. Connection errors show the actual

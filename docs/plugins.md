@@ -265,6 +265,16 @@ contribution 内稳定即可，聚合器会用 contribution id 做命名空间�
 键盘焦点可用通用布尔字段 `selected: true`，painter 会以反显样式绘制；不要把它当作
 持久选中值或另一个状态颜色。
 
+## Harness 标识席位
+
+`conversation.harness` 是 session scope 的 single seat，位于模型名前。
+内置 `harness-badge` 根据当前 tab 的连接身份匹配 Registry，只从 Registry 的
+`icon` URL 下载图标；PNG 缓存在 settings 同级 `cache/harness-icons`，SVG 由
+Client 树转为 PNG。无内置品牌素材。首次加载、缺失、失败和非图片终端显示名称。
+该 seat 接收单个 `image` 节点：`id` 为所属 session id，`name` 为名称回退，
+`mime` 为 `image/png`，可选 `dataBase64` 为图标。painter 校验 session 归属并负责
+图片位置、回收；迟到的旧会话快照不能在新 tab 显示。插件不接触 TTY。
+
 ## 当前可调用：`tuiOverlay`
 
 `openSlider(options, handlers)` 提供数值滑条；`openSelect(options, handlers)` 提供

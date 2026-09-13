@@ -1386,6 +1386,7 @@ fn preset_ack_folds_the_chip_and_new_session_waits_for_the_host_mode() {
 fn live_acp_new_parks_the_current_session_and_binds_the_new_tab() {
     let (mut app, ctl, _rx) = test_app();
     app.demo = false;
+    app.transcript.push_user("existing conversation".into(), false);
     let before = app.session_id.clone();
     app.run_slash("new", "fresh", &ctl);
     assert_ne!(
@@ -1526,24 +1527,22 @@ fn prompt_jump_without_user_prompts_tips_instead_of_jumping() {
 }
 
 #[test]
-fn harness_restart_clears_the_old_session_before_reconnecting() {
+fn harness_new_tab_preserves_the_previous_session() {
     let (mut app, ctl, _rx) = test_app();
     app.demo = false;
     app.transcript.push_user("old Harness turn".into(), false);
     app.session_model = Some("old-harness-model".into());
-    assert!(!app.transcript.cells.is_empty());
+    let old_cells = app.transcript.cells.len();
 
-    app.handle(
-        AppEvent::Ctl(CtlEvent::Starting {
-            runtime: "harness".into(),
-        }),
-        &ctl,
-    );
+    app.handle(AppEvent::Ctl(CtlEvent::NewSessionRequested), &ctl);
 
     assert!(app.transcript.cells.is_empty());
     assert!(app.session_model.is_none());
     assert!(!app.session_bound);
-    assert_eq!(app.state, RunState::Starting);
+    assert_eq!(app.session_tabs().len(), 2);
+    app.switch_to_session(0);
+    assert_eq!(app.transcript.cells.len(), old_cells);
+    assert_eq!(app.session_model.as_deref(), Some("old-harness-model"));
 }
 
 #[test]

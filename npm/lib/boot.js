@@ -1,3 +1,4 @@
+import { apply as applyHarnessBadge, inject as harnessBadgeInject } from './harness-badge.js'
 /**
  * Boot-time restore of a statically-registered gallery palette (ayu,
  * iceberg, …). `/theme` persistence writes `settings.theme`; dynamic
@@ -142,6 +143,7 @@ export async function bootClient(options = {}) {
     await ctx.plugin({ name: 'stats-view', inject: statsViewInject, apply: applyStatsView })
     await ctx.plugin({ name: 'acp-session-status', inject: sessionStatusInject, apply: applySessionStatus })
     await ctx.plugin({ name: 'status-view', inject: statusViewInject, apply: applyStatusView })
+    await ctx.plugin({ name: 'harness-badge', inject: harnessBadgeInject, apply: applyHarnessBadge }, harnessConfig)
     await ctx.plugin({ name: 'harness-view', inject: harnessViewInject, apply: applyHarnessView }, harnessConfig)
     await ctx.plugin({ name: 'deepseek-logo', inject: deepseekLogoInject, apply: applyDeepseekLogo })
     const localPlugins = installTuiLocalPlugins(ctx, {
@@ -203,6 +205,7 @@ export async function bootClient(options = {}) {
     applyStatsView(ctx)
     applySessionStatus(ctx)
     applyStatusView(ctx)
+    applyHarnessBadge(ctx, harnessConfig)
     applyHarnessView(ctx, harnessConfig)
     applyDeepseekLogo(ctx)
     const localPlugins = installTuiLocalPlugins(ctx, {

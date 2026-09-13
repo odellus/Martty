@@ -16,9 +16,11 @@ export const SLOT_NAMES = Object.freeze([
   'conversation.input.dock',
   'conversation.navigation.dock',
   'conversation.composer.dock',
+  'conversation.harness',
 ])
 
 const SLOT_DEFINITIONS = Object.freeze({
+  'conversation.harness': Object.freeze({ kind: 'single', scope: 'session' }),
   'welcome.hero': Object.freeze({ kind: 'single', scope: 'root' }),
   'welcome.info': Object.freeze({ kind: 'single', scope: 'root' }),
   'chrome.right': Object.freeze({ kind: 'list', scope: 'root' }),

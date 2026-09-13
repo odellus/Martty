@@ -464,13 +464,13 @@ fn attached_landing_does_not_guess_runtime_before_initialize_or_after_failure() 
 }
 
 #[test]
-fn switching_landing_never_falls_back_to_old_runtime_or_auth() {
+fn new_tab_landing_never_falls_back_to_old_runtime_or_auth() {
     let mut app = live_test_app();
     app.server_info = Some("dsh-acp".into());
     app.auth.status = crate::acp_auth::AuthStatus::Configured;
     app.auth.method_name = Some("Old credential".into());
     let (ctl, _commands) = crate::controller::tests::test_controller();
-    app.handle(crate::bus::AppEvent::Ctl(crate::bus::CtlEvent::Starting { runtime: "harness".into() }), &ctl);
+    app.handle(crate::bus::AppEvent::Ctl(crate::bus::CtlEvent::NewSessionRequested), &ctl);
     let text = welcome_info_lines(&app).iter().flat_map(|line| line.spans.iter())
         .map(|span| span.content.as_ref()).collect::<String>();
     assert!(!text.contains("dsh-acp"), "{text}");
@@ -1576,55 +1576,27 @@ fn welcome_and_conversation_are_two_states_without_a_mixed_third_state() {
 }
 
 #[test]
-fn harness_switch_returns_the_fresh_empty_session_to_the_landing_page() {
+fn harness_new_tab_displays_the_landing_page_and_preserves_old_transcript() {
     let mut app = live_test_app();
     let (ctl, _commands) = crate::controller::tests::test_controller();
     app.show_banner = false;
     app.transcript.push_user("old Harness turn".into(), false);
 
-    app.handle(
-        crate::bus::AppEvent::Ctl(crate::bus::CtlEvent::Starting {
-            runtime: "harness".into(),
-        }),
-        &ctl,
-    );
-    app.handle(
-        crate::bus::AppEvent::Ctl(crate::bus::CtlEvent::SessionBound {
-            session_id: "fresh-empty-session".into(),
-            notice: None,
-        }),
-        &ctl,
-    );
-    app.handle(
-        crate::bus::AppEvent::Ctl(crate::bus::CtlEvent::Ready {
-            server: "dsh-acp".into(),
-        }),
-        &ctl,
-    );
-    app.handle(
-        crate::bus::AppEvent::Ctl(crate::bus::CtlEvent::TuiOpDone(
-            "Harness switched to Bundled DeepSeek Harness".into(),
-        )),
-        &ctl,
-    );
+    app.handle(crate::bus::AppEvent::Ctl(crate::bus::CtlEvent::NewSessionRequested), &ctl);
 
-    assert!(
-        app.show_banner,
-        "a fresh empty Harness session is a landing state"
-    );
-    assert!(
-        app.transcript.cells.is_empty(),
-        "the switch result must not become session transcript"
-    );
+    assert!(app.show_banner);
+    assert!(app.transcript.cells.is_empty());
+    assert_eq!(app.session_tabs().len(), 2);
     let frame = dump_frame(&mut app, 140, 60);
-    assert!(
-        frame.contains("https://martty.sh"),
-        "landing page is visible:\n{frame}"
-    );
-    assert!(
-        frame.contains("Harness switched to Bundled DeepSeek Harness"),
-        "the switch result remains visible as chrome:\n{frame}"
-    );
+    assert!(frame.contains("https://martty.sh"), "landing page is visible:\n{frame}");
+    assert!(!frame.contains("old Harness turn"), "{frame}");
+    // Selecting the first tab uses the same public command path as the TUI.
+    app.input.set("/session prev".into());
+    app.handle(crate::bus::AppEvent::Term(crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Enter, crossterm::event::KeyModifiers::NONE,
+    ))), &ctl);
+    let frame = dump_frame(&mut app, 140, 60);
+    assert!(frame.contains("old Harness turn"), "{frame}");
 }
 
 #[test]
@@ -3719,4 +3691,58 @@ fn roomy_chrome_stack_keeps_the_conversation_visible() {
         "chat collapsed on a terminal with room to spare",
     );
     assert!(app.input_area.bottom() <= 30);
+}
+
+#[test]
+fn harness_name_precedes_model_without_registry_image() {
+    let mut app = live_test_app();
+    app.session_bound = true;
+    app.server_info = Some("Custom Harness".into());
+    app.selected_model = Some("example-model".into());
+    let text: String = status_right(&app).iter().map(|span| span.content.as_ref()).collect();
+    assert!(text.contains("Custom Harness · example-model"), "{text}");
+}
+
+#[test]
+fn harness_icon_is_session_scoped_and_falls_back_on_non_pixel_terminals() {
+    let mut app = live_test_app();
+    app.session_bound = true;
+    app.session_id = "alpha".into();
+    app.server_info = Some("Alpha ACP".into());
+    app.selected_model = Some("example-model".into());
+    let snapshot = crate::slots::parse_snapshot(&serde_json::json!({
+        "protocol": 0, "slot": "conversation.harness", "nodes": [{
+            "id": "harness:alpha", "kind": "image", "name": "Alpha Harness",
+            "mime": "image/png", "dataBase64": crate::pet::base64(crate::pet::LIANG_IDLE_PNG)
+        }]
+    })).unwrap().unwrap();
+    app.harness_badge = crate::harness_badge::parse(&snapshot);
+    assert!(status_right(&app).iter().any(|s| s.content == "Alpha Harness · "));
+    app.pet_pixels = true;
+    // Use a small valid PNG; the painter rejects oversized Registry images.
+    let mut png = Vec::new();
+    image::DynamicImage::new_rgba8(16, 16).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let snapshot = crate::slots::parse_snapshot(&serde_json::json!({
+        "protocol": 0, "slot": "conversation.harness", "nodes": [{
+            "id": "harness:alpha", "kind": "image", "name": "Alpha Harness",
+            "mime": "image/png", "dataBase64": crate::pet::base64(&png)
+        }]
+    })).unwrap().unwrap();
+    app.harness_badge = crate::harness_badge::parse(&snapshot);
+    let line = meta_line(&app, 100);
+    layout_harness_icon(&mut app, &line, Rect::new(1, 20, 100, 1));
+    assert!(app.harness_thumb.is_some());
+    assert_eq!(app.harness_thumb.as_ref().unwrap().rect.height, 1);
+    let mut pixel_terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    pixel_terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    let rect = app.harness_thumb.as_ref().unwrap().rect;
+    assert_eq!(pixel_terminal.backend().buffer()[(rect.x, rect.y)].symbol(), "\u{2007}");
+    app.session_id = "beta".into();
+    app.server_info = Some("Beta Harness".into());
+    let text: String = status_right(&app).iter().map(|s| s.content.as_ref()).collect();
+    assert!(text.contains("Beta Harness · example-model"));
+    assert!(!text.contains(HARNESS_IMAGE_SPACE));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    assert!(app.harness_thumb.is_none());
 }
