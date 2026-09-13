@@ -75,6 +75,7 @@ fn harness_new_session_action_preserves_old_tabs_from_every_position() {
         app.open_new_session("old-second".into(), true);
         app.open_new_session("old-third".into(), true);
         app.switch_to_session(active_tab);
+        app.transcript.push_user("existing conversation".into(), false);
         app.handle(AppEvent::Ctl(CtlEvent::NewSessionRequested), &ctl);
         assert_eq!(app.session_tabs().len(), 4);
         assert!(app.session_tabs()[3].current);
@@ -89,28 +90,21 @@ fn harness_new_session_action_preserves_old_tabs_from_every_position() {
 }
 
 #[test]
-fn empty_session_then_harness_new_chat_and_new_always_adds_a_tab() {
+fn empty_session_reuses_tab_then_chat_and_new_adds_a_tab() {
     let (mut app, ctl, _rx) = test_app();
     app.demo = false;
     app.startup_bound = true;
     app.handle(AppEvent::Ctl(CtlEvent::NewSessionRequested), &ctl);
-    app.handle(AppEvent::Ctl(CtlEvent::SessionBound {
-        session_id: "new-harness".into(), notice: None,
+    assert_eq!(app.session_tab_count(), 1);
+    app.handle(AppEvent::Ctl(CtlEvent::SessionBoundTo {
+        previous_id: app.session_id.clone(), session_id: "new-harness".into(), notice: None,
     }), &ctl);
     app.transcript.push_user("hello".into(), false);
-    app.apply_ui(final_event("new-harness", "hello back"));
     app.new_session_flow("", &ctl);
-    app.handle(AppEvent::Ctl(CtlEvent::SessionBound {
-        session_id: "new-second".into(), notice: None,
-    }), &ctl);
-    assert_eq!(app.session_tabs().len(), 3);
-    assert!(app.session_tabs()[2].current);
-    assert_eq!(app.session_id, "new-second");
-    app.switch_to_session(1);
-    assert_eq!(app.session_id, "new-harness");
-    assert!(transcript_text(&mut app.transcript).contains("hello back"));
+    assert_eq!(app.session_tab_count(), 2);
     app.switch_to_session(0);
-    assert_eq!(app.session_id, "dsh-test");
+    assert_eq!(app.session_id, "new-harness");
+    assert!(transcript_text(&mut app.transcript).contains("hello"));
 }
 
 #[test]
@@ -154,7 +148,7 @@ fn harness_identity_and_capabilities_follow_the_owning_tab() {
 }
 
 #[test]
-fn a_failed_harness_session_retry_binds_its_original_tab_after_a_later_new_session() {
+fn replaced_empty_harness_tab_ignores_a_late_bind() {
     let (mut app, ctl, _rx) = test_app();
     app.demo = false;
     app.startup_bound = true;
@@ -168,9 +162,8 @@ fn a_failed_harness_session_retry_binds_its_original_tab_after_a_later_new_sessi
     app.handle(AppEvent::Ctl(CtlEvent::SessionBoundTo { previous_id: first, session_id: "first-retried".into(), notice: None }), &ctl);
     assert_eq!(app.session_id, "second");
     assert!(app.session_bound);
-    assert_eq!(app.session_tabs().len(), 3);
-    app.switch_to_session(1);
-    assert_eq!(app.session_id, "first-retried");
+    assert_eq!(app.session_tabs().len(), 1);
+    assert_eq!(app.session_id, "second");
     assert!(app.session_bound);
     assert!(app.awaiting_binds.is_empty());
 }
@@ -501,6 +494,7 @@ fn switch_round_trip_preserves_transcripts_and_queues() {
 fn session_bound_lands_on_the_tab_that_asked() {
     let (mut app, ctl, _rx) = test_app();
     app.demo = false;
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "", &ctl);
     let placeholder = app.session_id.clone();
     assert!(
@@ -536,6 +530,7 @@ fn session_bound_lands_on_the_tab_that_asked() {
 fn parked_session_idle_dispatches_its_own_queue() {
     let (mut app, _demo_ctl, _rx) = test_app();
     let (ctl, commands) = crate::controller::tests::test_controller();
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "s-two", &ctl);
     while commands.try_recv().is_ok() {} // /new's FetchSkills
     app.parked[0].prompt_queue.push_back(ClientQueuedPrompt {
@@ -579,6 +574,7 @@ fn tab_strip_renders_only_with_multiple_sessions() {
         "one session renders no tab strip:\n{single}"
     );
 
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "s-two", &ctl);
     let frame = crate::ui::dump_frame(&mut app, 100, 30);
     let row0 = frame.lines().next().unwrap_or_default();
@@ -606,6 +602,7 @@ fn powerline_tabs_use_a_brand_active_segment_and_seamless_arrows() {
     use ratatui::Terminal;
 
     let (mut app, ctl, _rx) = test_app();
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "s-two", &ctl);
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -638,7 +635,9 @@ fn adjacent_inactive_powerline_tabs_alternate_neutral_fills() {
     use ratatui::Terminal;
 
     let (mut app, ctl, _rx) = test_app();
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "s-two", &ctl);
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "s-three", &ctl);
     let backend = TestBackend::new(100, 30);
     let mut terminal = Terminal::new(backend).expect("test terminal");
@@ -1138,6 +1137,7 @@ fn close_of_an_unbound_tab_discards_its_coming_bind() {
     let (mut app, _demo_ctl, _rx) = test_app();
     let (ctl, commands) = crate::controller::tests::test_controller();
     app.demo = false;
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "", &ctl);
     while commands.try_recv().is_ok() {} // drain /new's NewSession + FetchSkills
     let placeholder = app.session_id.clone();
@@ -1170,6 +1170,7 @@ fn close_of_an_unbound_tab_discards_its_coming_bind() {
     }
 
     // A later /new still binds normally — the tombstone kept the FIFO clean.
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "", &ctl);
     app.handle(
         AppEvent::Ctl(CtlEvent::SessionBound {
@@ -1190,6 +1191,7 @@ fn composer_draft_scroll_model_and_banner_are_bound_to_the_tab() {
     app.show_banner = false; // this tab already prompted
 
     // A fresh tab starts clean — no draft, no scroll, no model pick.
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "", &ctl);
     assert!(app.input.is_empty(), "fresh tab has an empty composer");
     assert_eq!(app.scroll_up, 0);
@@ -1391,6 +1393,7 @@ fn startup_bind_while_a_new_is_in_flight_lands_on_the_parked_startup_tab() {
     let mut app = App::new(Some(Theme::dark()), cfg, "dsh-start".into(), false, false, tx);
     // The user /new's before the startup session/new resolved: the startup
     // tab (dsh-start) is parked and unbound; the placeholder is live.
+    app.transcript.push_user("existing conversation".into(), false);
     app.run_slash("new", "", &ctl);
     let placeholder = app.session_id.clone();
     assert_eq!(app.parked[0].id, "dsh-start");
@@ -1681,4 +1684,41 @@ fn operation_failure_does_not_finish_live_or_parked_prompts() {
     assert!(app.parked[0].running);
     assert!(transcript_text(&mut app.parked[0].transcript).contains("unsupported config option"));
     assert!(transcript_text(&mut app.transcript).contains("unsupported config option"));
+}
+
+#[test]
+fn failed_harness_start_replaces_the_new_session_progress_tip() {
+    let (mut app, ctl, _) = test_app();
+    app.demo = false;
+    app.startup_bound = true;
+    app.new_session_flow("", &ctl);
+    let previous_id = app.session_id.clone();
+    app.handle(AppEvent::Ctl(CtlEvent::BindFailedTo {
+        previous_id, message: "ACP process exited (127)".into(),
+    }), &ctl);
+    let frame = crate::ui::dump_frame(&mut app, 100, 34);
+    assert!(!frame.contains("session/new …"), "{frame}");
+    assert!(frame.contains("ACP process exited (127)"));
+}
+
+#[test]
+fn empty_tab_reuse_keeps_draft_and_discards_late_startup_binding() {
+    let (mut app, ctl, _) = test_app();
+    app.demo = false;
+    app.session_bound = false;
+    app.startup_bound = false;
+    app.input.set("unsent draft".into());
+    app.new_session_flow("", &ctl);
+    let requested = app.session_id.clone();
+    app.handle(AppEvent::Ctl(CtlEvent::SessionBound {
+        session_id: "late-startup".into(), notice: None,
+    }), &ctl);
+    assert_eq!(app.session_tab_count(), 1);
+    assert_eq!(app.session_id, requested);
+    assert_eq!(app.input.buf(), "unsent draft");
+    app.handle(AppEvent::Ctl(CtlEvent::SessionBoundTo {
+        previous_id: requested, session_id: "new-session".into(), notice: None,
+    }), &ctl);
+    assert_eq!(app.session_tab_count(), 1);
+    assert_eq!(app.session_id, "new-session");
 }

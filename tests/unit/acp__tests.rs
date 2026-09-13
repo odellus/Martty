@@ -218,7 +218,10 @@ fn prompt_response_usage_reaches_the_ui() {
 fn prompt_error_ends_the_ui_turn_before_reporting_the_error() {
     let finish = PromptFinish {
         session_id: "s".into(),
-        result: Err(AcpError::new(-32603, "boom")),
+        result: Err(serde_json::from_value(json!({
+            "code": -32603, "message": "boom",
+            "data": { "marttyConnection": { "id": "h3", "authMethods": [] } }
+        })).unwrap()),
         payload: ParkedPromptKind::Text("hello".into()),
         gen: 1,
     };
@@ -234,8 +237,8 @@ fn prompt_error_ends_the_ui_turn_before_reporting_the_error() {
     ));
     assert!(matches!(
         rx.try_recv(),
-        Ok(AppEvent::Ctl(CtlEvent::SessionError { session_id, .. }))
-            if session_id == "s"
+        Ok(AppEvent::Ctl(CtlEvent::SessionError { session_id, message }))
+            if session_id == "s" && message == "prompt: boom"
     ));
 }
 
@@ -2414,7 +2417,11 @@ async fn auth_failure_parks_prompts_but_reports_steers_back_to_the_client() {
                     let _ = prompt_tx.send(text.clone());
                     if text == "first" && !rejected_first.swap(true, Ordering::SeqCst) {
                         responder
-                            .respond_with_error(AcpError::new(-32000, "authentication required"))
+                            .respond_with_error(serde_json::from_value(json!({
+                                "code": -32603, "message": "Internal error",
+                                "data": { "errorKind": "authentication_failed",
+                                    "details": "Failed to authenticate. API Error: 403 Insufficient account balance" }
+                            })).unwrap())
                     } else {
                         responder.respond(PromptResponse::new(StopReason::EndTurn))
                     }
@@ -4130,4 +4137,41 @@ fn stream_owned_new_session_keeps_the_negotiated_connection_facts() {
     assert_eq!(snapshot.server.as_deref(), Some("profile-host"));
     assert!(snapshot.load_session);
     assert!(snapshot.list_session);
+}
+
+#[test]
+fn structured_auth_failure_opens_owning_connection_and_parks_original_prompt() {
+    let finish = PromptFinish {
+        session_id: "claude-session".into(),
+        result: Err(serde_json::from_value(json!({
+            "code": -32603, "message": "Internal error",
+            "data": {
+                "errorKind": "authentication_failed",
+                "details": "403 Insufficient account balance",
+                "marttyConnection": {
+                    "id": "h3", "command": "claude-acp",
+                    "authMethods": [{"id": "h3:login", "name": "Claude login"}]
+                }
+            }
+        })).unwrap()),
+        payload: ParkedPromptKind::Text("original request".into()), gen: 1,
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut parked = VecDeque::new();
+    apply_prompt_finish(finish, &mut parked, &tx, &[], None);
+    assert_eq!(parked.len(), 1);
+    assert_eq!(parked[0].session.as_deref(), Some("claude-session"));
+    assert!(matches!(&parked[0].kind, ParkedPromptKind::Text(text) if text == "original request"));
+    assert!(matches!(rx.try_recv(), Ok(AppEvent::Ui(crate::events::UiEvent::TurnEnd { kind, .. })) if kind == "interrupted"));
+    match rx.try_recv().unwrap() {
+        AppEvent::Ctl(CtlEvent::SessionAuth { session_id, snapshot, open }) => {
+            assert_eq!(session_id, "claude-session");
+            assert!(open);
+            assert_eq!(snapshot.status, AuthStatus::NeedsAuth);
+            assert_eq!(snapshot.message.as_deref(), Some("403 Insufficient account balance"));
+            assert_eq!(snapshot.methods[0].id, "h3:login");
+        }
+        _ => panic!("expected owning-session authentication panel"),
+    }
+    assert!(rx.try_recv().is_err());
 }

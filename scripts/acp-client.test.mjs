@@ -344,3 +344,18 @@ test('Windows ACP command shims preserve spaces and metacharacters', { skip: pro
   ctx.acpClient.stdin.write(JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{}})+'\n')
   assert.deepEqual(JSON.parse((await reply)[0]).result.argv, args)
 })
+
+test('Harness child does not inherit the outer npm exec package or call selection', () => {
+  const result = isolatedAcpClient(`
+    process.env.npm_config_package = './outer-martty.tgz';
+    process.env.npm_config_call = 'martty';
+    process.env.npm_config_registry = 'https://registry.npmjs.org/';
+    const ctx = {};
+    apply(ctx, { agent: { command: process.execPath, args: ['-e', 'console.error(JSON.stringify({package:process.env.npm_config_package,call:process.env.npm_config_call,registry:process.env.npm_config_registry,custom:process.env.MARTTY_TEST_CUSTOM}))'], env: {MARTTY_TEST_CUSTOM:'kept'} } });
+    await once(ctx.acpClient.child, 'close');
+    console.log(ctx.acpClient.diagnostics());
+    ctx.acpClient.close();
+  `)
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout.trim()), { registry: 'https://registry.npmjs.org/', custom: 'kept' })
+})

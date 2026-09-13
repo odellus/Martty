@@ -5,7 +5,16 @@ All notable changes to this project are documented here. The project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Route structured ACP authentication failures to the owning session’s authentication panel and retry parked requests after authentication; omit connection metadata from prompt error text.
+- Show DeepSeek’s icon from the installed Lobe SVG library when the ACP Registry has no entry, with offline rendering, versioned image caching and name fallback.
+
+- Selecting a Harness in an empty session switches directly in the current tab without the default-saved reminder.
+
 ### Added
+
+- Show the current tab’s Harness icon before the model, using Registry assets cached locally; fall back to its name while unavailable or on terminals without image support.
 
 - A Chinese and English workflow article on trying Codex and Claude Code in one
   terminal interface, with a concrete task handoff and explicit context/account boundaries.
@@ -36,8 +45,10 @@ All notable changes to this project are documented here. The project follows
 
 ### Fixed
 
+- Isolate nested Harness runners from the outer `npm exec --package` / `--call` selection so local-package launches can start Codex and other npx Harnesses; replace stale session-creation progress after a failed start.
+
 - Decouple Harness defaults from session lifetimes: `/harness` saves
-  `defaultHarness`, and every `/new` opens a new tab using that default. Enter
+  `defaultHarness`, and `/new` starts a session using that default, reusing an empty tab or opening a new tab after conversation activity. Enter
   after selection and `/harness <id> --new` use the same new-tab flow. Existing
   tabs retain their connection, history and settings; switching from an empty
   or later tab no longer clears old tabs or crashes on the next `/new` (#117).

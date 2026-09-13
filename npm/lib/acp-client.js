@@ -8,6 +8,7 @@
  */
 
 import spawn from 'cross-spawn'
+import { harnessEnvironment } from './harness-environment.js'
 import { installAcpClientEvents } from './acp-client-events.js'
 import { installAcpSessionConfig } from './acp-session-config.js'
 import { installAcpSessionPlan } from './acp-session-plan.js'
@@ -115,7 +116,7 @@ export function apply(ctx, config = {}) {
 function spawnAgent(agent) {
   const child = spawn(agent.command, agent.args ?? [], {
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, ...(agent.env ?? {}) },
+    env: harnessEnvironment(agent.env),
   })
   child.stdin.on('error', () => {})
   child.stdout.on('error', () => {})

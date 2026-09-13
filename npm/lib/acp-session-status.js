@@ -252,6 +252,7 @@ export function installAcpSessionStatus(ctx, options = {}) {
             let facts = connections.get(owner.id)
             if (!facts) {
               facts = { connection: 'attached', server: owner.agentInfo?.name,
+                runtime: { command: owner.command, args: owner.args ?? [] },
                 auth: { status: owner.authMethods?.length ? 'configured' : undefined, method: undefined } }
               connections.set(owner.id, facts)
             }

@@ -815,7 +815,7 @@ fn apply_prompt_finish(
             }));
             let _ = bus.send(AppEvent::Ctl(CtlEvent::SessionError {
                 session_id: finish.session_id,
-                message: format!("prompt: {err}"),
+                message: format!("prompt: {}", acp_error_message(&err)),
             }));
         }
     }

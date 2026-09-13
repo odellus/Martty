@@ -169,15 +169,8 @@ test('/harness add saves a custom command; only a later selection switches', asy
       command: 'local-acp',
       args: ['--stdio'],
     })
-    assert.deepEqual(result, {
-      action: 'harness-selected',
-      harness: {
-        id: 'local',
-        label: 'Local ACP',
-        command: 'local-acp',
-        args: ['--stdio'],
-      },
-    })
+    assert.deepEqual(result, { action: 'new-session' })
+    assert.equal(ctx.tuiOverlay.active(), null)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -541,7 +534,7 @@ test('/harness find confirms managed binary installation before switching', asyn
   }
 })
 
-test('/harness find switches a configured candidate without reconfiguring an empty session', async () => {
+test('/harness find starts the selected Harness directly in an empty session', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'martty-harness-find-configured-view-'))
   const settingsPath = path.join(root, 'settings.json')
   try {
@@ -571,10 +564,10 @@ test('/harness find switches a configured candidate without reconfiguring an emp
       searchable: true,
     })
     const result = await ctx.tuiOverlay.dispatch({ protocol: 0, id: 'harness-find', event: 'submit', value: 'local' })
-    assert.equal(result?.action, 'harness-selected')
+    assert.equal(result?.action, 'new-session')
     assert.deepEqual(switched, [{ command: 'local-acp', args: ['--stdio'] }])
     assert.equal(selectedHarness(settingsPath)?.id, 'local')
-    assert.equal(ctx.tuiOverlay.active().id, 'harness-saved')
+    assert.equal(ctx.tuiOverlay.active(), null)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

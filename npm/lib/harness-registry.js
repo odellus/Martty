@@ -128,6 +128,7 @@ export function normalizeAcpRegistry(value, options = {}) {
     return [{
       id: agent.id,
       label: agent.name,
+      ...(typeof agent.icon === 'string' ? { icon: agent.icon } : {}),
       version: agent.version,
       description: typeof agent.description === 'string' ? agent.description : '',
       distributions,

@@ -238,7 +238,8 @@ export function apply(ctx, options = {}) {
       notifyDownloads()
     }
     const newSession = () => ({ action: 'new-session' })
-    if (openNow && !options.hostOwned) return newSession()
+    const emptySession = ctx.acpSessionStatus?.current()?.session?.started === false
+    if (!options.hostOwned && (openNow || emptySession)) return newSession()
     openView({ id: 'harness-saved', title: 'Default Harness saved', nodes: [{
       id: 'notice', kind: 'notice', level: 'info',
       text: options.hostOwned

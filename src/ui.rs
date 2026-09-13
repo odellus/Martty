@@ -180,6 +180,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.slot_actions.clear();
     app.tab_rects.clear();
     app.pet_want = None;
+    app.harness_thumb = None;
     app.caret_cell = None;
     // The mouse-only expand button's frame rect is rebuilt by
     // `layout_expand_btn`; clear it first so a child view (or a frame where
@@ -431,6 +432,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_view_overlay(f, app, area);
     draw_permission_ask(f, app, area);
     draw_elicitation_form(f, app, area);
+    // A modal may cover the composer after its layout. Never paint pixels over it.
+    if app.harness_thumb.as_ref().is_some_and(|thumb| {
+        (0..2).any(|dx| f.buffer_mut()[(thumb.rect.x + dx, thumb.rect.y)].symbol() != "\u{2007}")
+    }) {
+        app.harness_thumb = None;
+    }
 }
 
 fn draw_cordis_approval(f: &mut Frame, app: &App, area: Rect) {
@@ -1758,6 +1765,7 @@ fn meta_line(app: &App, width: usize) -> Line<'static> {
                 Style::default().fg(theme.caption),
             ));
         }
+        compact.extend(harness_spans(app));
         if let Some(shown_model) = &shown_model {
             compact.push(Span::styled(
                 format!("{shown_model} "),
@@ -1787,8 +1795,10 @@ fn meta_line(app: &App, width: usize) -> Line<'static> {
     Line::from(spans)
 }
 
-fn draw_meta_row(f: &mut Frame, app: &App, area: Rect) {
-    f.render_widget(Paragraph::new(meta_line(app, area.width as usize)), area);
+fn draw_meta_row(f: &mut Frame, app: &mut App, area: Rect) {
+    let line = meta_line(app, area.width as usize);
+    layout_harness_icon(app, &line, area);
+    f.render_widget(Paragraph::new(line), area);
 }
 
 /// The active run-state line — rendered as the transcript's always-last line
@@ -2037,6 +2047,7 @@ fn status_right(app: &App) -> Vec<Span<'static>> {
     }
     spans.extend(context_hints(app));
     if app.session_bound {
+        spans.extend(harness_spans(app));
         if let Some(shown_model) = displayed_model(app) {
             spans.push(Span::styled(
                 shown_model,
@@ -2058,6 +2069,37 @@ fn status_right(app: &App) -> Vec<Span<'static>> {
     }
     spans.push(Span::raw(" "));
     spans
+}
+
+const HARNESS_IMAGE_SPACE: &str = "\u{2007}\u{2007} ";
+
+fn harness_spans(app: &App) -> Vec<Span<'static>> {
+    if !app.session_bound { return Vec::new(); }
+    let badge = app.harness_badge.as_ref().filter(|badge| badge.session == app.session_id);
+    let content = if app.pet_pixels && badge.is_some_and(|badge| badge.pixels.is_some()) {
+        Some(HARNESS_IMAGE_SPACE.to_string())
+    } else {
+        badge.map(|badge| badge.name.as_str()).or(app.server_info.as_deref())
+            .map(|name| format!("{name} · "))
+    };
+    content.into_iter().map(|text| Span::styled(text, Style::default().fg(app.theme.caption))).collect()
+}
+
+fn layout_harness_icon(app: &mut App, line: &Line, area: Rect) {
+    let mut x = area.x;
+    for span in &line.spans {
+        if span.content == HARNESS_IMAGE_SPACE && x + 2 <= area.right() {
+            if let Some(badge) = app.harness_badge.as_ref().filter(|badge| badge.session == app.session_id) {
+                if let Some(pixels) = &badge.pixels {
+                    app.harness_thumb = Some(crate::app::ThumbPlacement {
+                        id: badge.image_id, rect: Rect::new(x, area.y, 2, 1), data: pixels.clone(),
+                    });
+                }
+            }
+            break;
+        }
+        x = x.saturating_add(span.content.width() as u16);
+    }
 }
 
 fn displayed_model(app: &App) -> Option<String> {
@@ -2775,13 +2817,15 @@ fn draw_composer_box(
         Style::default().fg(theme.caption),
     );
     let title_width = span_widths(&title.spans) as u16;
+    let meta = meta_line(app, area.width.saturating_sub(2) as usize);
+    layout_harness_icon(app, &meta, Rect::new(area.x + 1, area.bottom() - 1, area.width.saturating_sub(2), 1));
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border))
         .title(title)
         .title(workspace)
-        .title_bottom(meta_line(app, area.width.saturating_sub(2) as usize))
+        .title_bottom(meta)
         .style(Style::default().bg(theme.panel));
     let inner = block.inner(area);
     f.render_widget(block, area);

@@ -6,7 +6,7 @@ import test from 'node:test'
 import { createHarnessDiscoveryScenario } from './harness-discovery-scenario.mjs'
 import { upsertHarness } from '../npm/lib/harnesses.js'
 
-test('empty tab → Harness default → new tab → chat → /new preserves every session', { skip: process.platform === 'win32', timeout: 60000 }, t => {
+test('Harness default and /new preserve conversations while reusing empty tabs', { skip: process.platform === 'win32', timeout: 60000 }, t => {
   const scenario = createHarnessDiscoveryScenario()
   t.after(() => rmSync(scenario.root, { recursive: true, force: true }))
   upsertHarness(scenario.settingsPath, { id:'fixture-beta', label:'Offline Beta', command:process.execPath,
@@ -37,6 +37,8 @@ def command(text):
     drain()
 try:
     wait_request('initial','session/new',1)
+    command('initial-first')
+    wait_request('initial','session/prompt',1)
     command('/harness fixture-beta')
     with open(os.path.join(sys.argv[3],'.martty','settings.json')) as f:
         assert json.load(f)['defaultHarness']=='fixture-beta'
@@ -54,15 +56,15 @@ try:
     assert wait_request('beta','session/prompt',3)['sessionId']=='fixture-beta-session'
     command('/session prev')
     command('initial-still-alive')
-    assert wait_request('initial','session/prompt',1)['sessionId']=='fixture-initial-session'
+    assert wait_request('initial','session/prompt',2)['sessionId']=='fixture-initial-session'
     command('/harness fixture-initial')
     c.send('\x1b'); drain()
     assert len([e for e in events() if e.get('role')=='initial' and e.get('method')=='session/new'])==1
     command('/new')
     wait_request('initial','session/new',2)
-    command('/new') # Even an empty current tab must produce another session.
+    command('/new') # An empty tab is reused, but still creates a fresh ACP session.
     wait_request('initial','session/new',3)
-    command('/harness fixture-beta --new')
+    command('/harness fixture-beta') # Empty sessions switch immediately without another Enter.
     wait_request('beta','session/new',3)
     command('beta-third')
     assert wait_request('beta','session/prompt',4)['sessionId']=='fixture-beta-session-3'

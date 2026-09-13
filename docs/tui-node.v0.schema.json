@@ -21,7 +21,8 @@
         "chrome.right",
         "conversation.input.dock",
         "conversation.navigation.dock",
-        "conversation.composer.dock"
+        "conversation.composer.dock",
+        "conversation.harness"
       ]
     },
     "rev": {

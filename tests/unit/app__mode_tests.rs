@@ -1386,6 +1386,7 @@ fn preset_ack_folds_the_chip_and_new_session_waits_for_the_host_mode() {
 fn live_acp_new_parks_the_current_session_and_binds_the_new_tab() {
     let (mut app, ctl, _rx) = test_app();
     app.demo = false;
+    app.transcript.push_user("existing conversation".into(), false);
     let before = app.session_id.clone();
     app.run_slash("new", "fresh", &ctl);
     assert_ne!(

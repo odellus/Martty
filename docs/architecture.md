@@ -96,7 +96,7 @@ Client 进程：独立 Cordis root
                tuiOverlay，注册 /status 命令
   harness-view 注入 tuiCommands + tuiOverlay + acpClient + acpSessionStatus；
                /harness 选择只保存 defaultHarness；下一次 /new 使用它；
-               完成面板 Enter 或 /harness <id> --new 复用 /new 创建新 tab；
+               完成面板 Enter 或 /harness <id> --new 复用 /new 的空 tab 复用逻辑；
                每个 tab 保留所属 ACP 连接，切换默认值不修改已有会话；
                产品内部 forcedHarness 初始化配置默认为空；有值时启动优先于
                持久化 defaultHarness；它不是 CLI 启动参数；
@@ -130,9 +130,11 @@ ACP stdio。Client root 由该进程自行创建，Host bundle rows 不等于 Cl
 
 Add / Install / Connect 只准备和保存 Harness recipe，不启动 ACP、不认证。
 安装成功后自动写入 `settings.json` 并刷新已配置列表；后台安装不抢焦点。
-`/harness` 选择保存 `defaultHarness`，Esc 返回当前会话，Enter 走 `/new`。
+`/harness` 选择保存 `defaultHarness`。空会话直接走 `/new`，复用当前 tab，不弹保存提醒；
+已有聊天时显示保存提醒，Esc 返回当前会话，Enter 走 `/new`。
 下载完成面板 Enter 和 `/harness <id> --new` 同样保存默认值，再走 `/new`。
-每次 `/new` 都创建新的 tab，包括当前 tab 为空、当前默认值未变化时。
+每次 `/new` 都按 defaultHarness 创建新会话；当前 tab 只有提示、没有聊天内容时原位复用，
+否则保留原 tab 并新建 tab。复用时保留未发送草稿，已替换会话的晚到绑定结果丢弃。
 已有 tab 的 transcript、草稿、模型、认证和能力信息与其连接一起保留。
 
 standalone 的 `acpClient` 用稳定的 stdio 入口管理多个 ACP 连接。连接按命令、
@@ -160,6 +162,14 @@ standalone 的 `acpClient` 用稳定的 stdio 入口管理多个 ACP 连接。�
 目录。尚未探测的条目标为 `Catalog`，不能提前声称已安装或未下载；选择它时只
 探测对应 recipe，再进入本地配置或下载确认。成功刷新以临时文件加 rename 更新
 磁盘缓存，失败不覆盖旧缓存；关闭面板后的异步结果不抢回焦点。
+
+## Harness icon
+
+内置 `harness-badge` 订阅当前 Session 的连接身份，匹配 Registry 图标并经
+`conversation.harness` slot 投影到模型名前。图标下载和 PNG 磁盘缓存属于 Client，
+图片位置与 Kitty 生命周期属于 Rust。默认 Harness 变更不影响当前 tab 的标识。
+缺失、加载失败或终端不支持图片时显示 Harness 名称。
+DeepSeek 尚无 Registry 条目时，从依赖包 `@lobehub/icons-static-svg` 读取 DeepSeek SVG（MIT），无需网络；按库版本生成缓存键，仍走同一 PNG 缓存。
 
 ## Creator skill overlay
 
@@ -239,6 +249,8 @@ Bright、light=Tomorrow）、`everforest` / `iceberg` /
 
 ## 控制面与绘制面
 
+标准 auth-required 错误和结构化 `data.errorKind: authentication_failed` 都打开所属会话的认证面板，
+保留 Agent 的具体错误原因；原请求暂存，认证成功后只重试该连接的暂存请求。
 Agent 登录以 ACP `authenticate` response 为准：请求进行中显示 `SigningIn`，
 成功响应后更新认证状态并继续缺失的 `session/new`；失败（包括返回
 `auth_required` 的账号资格拒绝）显示 `Failed` 与 Agent 的具体原因。浏览器

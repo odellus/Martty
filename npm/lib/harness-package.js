@@ -1,3 +1,4 @@
+import { harnessEnvironment } from './harness-environment.js'
 import { StringDecoder } from 'node:string_decoder'
 import spawn from 'cross-spawn'
 
@@ -155,7 +156,7 @@ export async function prepareHarnessPackage(entry, options = {}) {
     try {
       child = (options.spawnImpl ?? spawn)(runner, args, {
         cwd: options.cwd,
-        env: { ...process.env, ...distribution.env, ...entry.env, ...options.env },
+        env: harnessEnvironment({ ...distribution.env, ...entry.env, ...options.env }),
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
         detached: process.platform !== 'win32',

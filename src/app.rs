@@ -1373,6 +1373,8 @@ pub struct App {
     /// True when the terminal speaks the kitty graphics protocol: image
     /// thumbnails and the background layer emit real pixels (set by `main`).
     pub pet_pixels: bool,
+    pub harness_badge: Option<crate::harness_badge::Badge>,
+    pub harness_thumb: Option<ThumbPlacement>,
     /// The pet sprite the frame just drew around: cell box + working flag.
     /// Filled by `ui::draw` (the layout math lives there — one source of
     /// truth), reconciled against the terminal by `main` after the frame.
@@ -1870,6 +1872,8 @@ impl App {
             show_banner: true,
             pet_visible: false,
             pet_pixels: false,
+            harness_badge: None,
+            harness_thumb: None,
             pet_want: None,
             git_branch: None,
             git_check_at: Instant::now(),
@@ -3691,6 +3695,9 @@ impl App {
                                 matches!((snapshot.rev, current.rev), (Some(next), Some(previous)) if next <= previous)
                             });
                             if !stale {
+                                if snapshot.slot == "conversation.harness" {
+                                    self.harness_badge = crate::harness_badge::parse(&snapshot);
+                                }
                                 self.slot_snapshots.insert(snapshot.slot.clone(), snapshot);
                             }
                         }
@@ -3776,7 +3783,10 @@ impl App {
                     CtlEvent::BindFailedTo { previous_id, message } => {
                         self.awaiting_binds.retain(|entry| entry.id != previous_id);
                         // A failed empty tab must show its error, not the welcome page.
-                        if self.session_id == previous_id { self.show_banner = false; }
+                        if self.session_id == previous_id {
+                            self.show_banner = false;
+                            self.show_tip(self.locale.tr("session creation failed · /new to retry", "会话创建失败 · /new 重试"));
+                        }
                         else if let Some(slot) = self.parked.iter_mut().find(|slot| slot.id == previous_id) {
                             slot.show_banner = false;
                         }
@@ -7299,7 +7309,7 @@ impl App {
     }
 
     /// The `/new` flow, shared by the slash command and the tab strip `+`
-    /// cell: park the live session and open a fresh tab (issue #94).
+    /// cell: reuse an empty tab, otherwise park the conversation in its tab.
     fn new_session_flow(&mut self, arg: &str, ctl: &Controller) {
         if self.demo {
             let id = if arg.is_empty() {
@@ -7307,7 +7317,7 @@ impl App {
             } else {
                 arg.to_string()
             };
-            self.open_new_session(id.clone(), true);
+            self.prepare_new_session(id.clone(), true, ctl);
             ctl.send(Cmd::FetchSkills {
                 session_id: self.session_id.clone(),
             });
@@ -7324,7 +7334,7 @@ impl App {
             // the same shape main.rs seeds the startup session with. The
             // real id lands on this tab via `awaiting_binds` at SessionBound.
             let placeholder = format!("dsh-{}", timestamp());
-            self.open_new_session(placeholder.clone(), false);
+            self.prepare_new_session(placeholder.clone(), false, ctl);
             self.awaiting_binds.push_back(AwaitingBind {
                 id: placeholder.clone(),
                 open: true,
@@ -7332,6 +7342,35 @@ impl App {
             ctl.send(Cmd::NewSession { requester: Some(placeholder), retry_auth: None });
             self.show_tip(self.locale.tr("session/new …", "正在创建会话（session/new）…"));
         }
+    }
+
+    fn prepare_new_session(&mut self, id: String, bound: bool, ctl: &Controller) {
+        let empty = !self.prompt_pending && self.state != RunState::Running
+            && self.prompt_queue.is_empty()
+            && self.transcript.cells.iter().all(|cell| matches!(cell.kind, crate::transcript::CellKind::Notice { .. }));
+        if !empty {
+            self.open_new_session(id, bound);
+            return;
+        }
+        let old = self.take_live_slot();
+        if !self.startup_bound && !old.session_bound
+            && !self.awaiting_binds.iter().any(|entry| entry.id == old.id)
+        {
+            self.startup_bound = true;
+            self.awaiting_binds.push_front(AwaitingBind { id: old.id.clone(), open: false });
+        }
+        // Keep outstanding bind requests in FIFO order, but discard their late results.
+        for awaiting in &mut self.awaiting_binds {
+            if awaiting.id == old.id { awaiting.open = false; }
+        }
+        ctl.send(Cmd::ForgetSession { session_id: old.id });
+        let mut fresh = SessionSlot::fresh(id, bound);
+        fresh.transcript.locale = self.locale;
+        fresh.input = old.input;
+        fresh.pending_images = old.pending_images;
+        fresh.input_expanded = old.input_expanded;
+        self.put_live_slot(fresh);
+        self.after_switch();
     }
 
     /// The `/close` flow (issue #94): stop viewing the current session tab

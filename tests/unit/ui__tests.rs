@@ -3692,3 +3692,57 @@ fn roomy_chrome_stack_keeps_the_conversation_visible() {
     );
     assert!(app.input_area.bottom() <= 30);
 }
+
+#[test]
+fn harness_name_precedes_model_without_registry_image() {
+    let mut app = live_test_app();
+    app.session_bound = true;
+    app.server_info = Some("Custom Harness".into());
+    app.selected_model = Some("example-model".into());
+    let text: String = status_right(&app).iter().map(|span| span.content.as_ref()).collect();
+    assert!(text.contains("Custom Harness · example-model"), "{text}");
+}
+
+#[test]
+fn harness_icon_is_session_scoped_and_falls_back_on_non_pixel_terminals() {
+    let mut app = live_test_app();
+    app.session_bound = true;
+    app.session_id = "alpha".into();
+    app.server_info = Some("Alpha ACP".into());
+    app.selected_model = Some("example-model".into());
+    let snapshot = crate::slots::parse_snapshot(&serde_json::json!({
+        "protocol": 0, "slot": "conversation.harness", "nodes": [{
+            "id": "harness:alpha", "kind": "image", "name": "Alpha Harness",
+            "mime": "image/png", "dataBase64": crate::pet::base64(crate::pet::LIANG_IDLE_PNG)
+        }]
+    })).unwrap().unwrap();
+    app.harness_badge = crate::harness_badge::parse(&snapshot);
+    assert!(status_right(&app).iter().any(|s| s.content == "Alpha Harness · "));
+    app.pet_pixels = true;
+    // Use a small valid PNG; the painter rejects oversized Registry images.
+    let mut png = Vec::new();
+    image::DynamicImage::new_rgba8(16, 16).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let snapshot = crate::slots::parse_snapshot(&serde_json::json!({
+        "protocol": 0, "slot": "conversation.harness", "nodes": [{
+            "id": "harness:alpha", "kind": "image", "name": "Alpha Harness",
+            "mime": "image/png", "dataBase64": crate::pet::base64(&png)
+        }]
+    })).unwrap().unwrap();
+    app.harness_badge = crate::harness_badge::parse(&snapshot);
+    let line = meta_line(&app, 100);
+    layout_harness_icon(&mut app, &line, Rect::new(1, 20, 100, 1));
+    assert!(app.harness_thumb.is_some());
+    assert_eq!(app.harness_thumb.as_ref().unwrap().rect.height, 1);
+    let mut pixel_terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    pixel_terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    let rect = app.harness_thumb.as_ref().unwrap().rect;
+    assert_eq!(pixel_terminal.backend().buffer()[(rect.x, rect.y)].symbol(), "\u{2007}");
+    app.session_id = "beta".into();
+    app.server_info = Some("Beta Harness".into());
+    let text: String = status_right(&app).iter().map(|s| s.content.as_ref()).collect();
+    assert!(text.contains("Beta Harness · example-model"));
+    assert!(!text.contains(HARNESS_IMAGE_SPACE));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+    assert!(app.harness_thumb.is_none());
+}

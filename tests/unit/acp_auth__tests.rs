@@ -149,3 +149,23 @@ fn needs_auth_notice_points_at_auth() {
     );
     assert!(text.contains("Log in with a DeepSeek API key"));
 }
+
+#[test]
+fn structured_auth_failure_keeps_the_provider_reason() {
+    let err: AcpError = serde_json::from_value(json!({
+        "code": -32603, "message": "Internal error",
+        "data": {
+            "errorKind": "authentication_failed",
+            "details": "Failed to authenticate. API Error: 403 Insufficient account balance",
+            "marttyConnection": {"id": "h3", "authMethods": []}
+        }
+    })).unwrap();
+    assert!(is_auth_required_error(&err));
+    assert_eq!(acp_error_message(&err),
+        "Failed to authenticate. API Error: 403 Insufficient account balance");
+    let unrelated: AcpError = serde_json::from_value(json!({
+        "code": -32603, "message": "Internal error",
+        "data": {"errorKind": "billing_error"}
+    })).unwrap();
+    assert!(!is_auth_required_error(&unrelated));
+}
