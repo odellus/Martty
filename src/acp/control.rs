@@ -613,7 +613,8 @@ async fn run_control(
             let _ = done.send(ControlFinish::Authenticated { method, result });
         }
         Cmd::NewSession { .. } => {
-            let mut request = NewSessionRequest::new(cwd.clone());
+            let mut request =
+                NewSessionRequest::new(cwd.clone()).mcp_servers(crate::mcp_supply::wire_servers());
             if let Some(method) = retry_auth {
                 request = request.meta(json!({"marttyAuthMethod": method}).as_object().unwrap().clone());
             }
@@ -701,15 +702,21 @@ async fn run_control(
                 {
                     Ok(resumed) => Ok((serde_json::to_value(resumed).unwrap_or(Value::Null), true)),
                     Err(err) if load_session && !is_auth_required_error(&err) => cx
-                        .send_request(LoadSessionRequest::new(sid.clone(), cwd.clone()))
+                        .send_request(
+                            LoadSessionRequest::new(sid.clone(), cwd.clone())
+                                .mcp_servers(crate::mcp_supply::wire_servers()),
+                        )
                         .block_task_setup_deadline()
                         .await
                         .map(|loaded| (serde_json::to_value(loaded).unwrap_or(Value::Null), false)),
                     Err(err) => Err(err),
                 }
             } else {
-                cx.send_request(LoadSessionRequest::new(sid.clone(), cwd.clone()))
-                    .block_task_setup_deadline()
+                cx.send_request(
+                    LoadSessionRequest::new(sid.clone(), cwd.clone())
+                        .mcp_servers(crate::mcp_supply::wire_servers()),
+                )
+                .block_task_setup_deadline()
                     .await
                     .map(|loaded| (serde_json::to_value(loaded).unwrap_or(Value::Null), false))
             };

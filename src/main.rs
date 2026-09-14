@@ -19,6 +19,7 @@ mod input;
 mod locale;
 mod logo;
 mod markdown;
+mod mcp_supply;
 mod pet;
 mod harness_badge;
 mod proto;

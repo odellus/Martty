@@ -858,7 +858,9 @@ async fn create_prompt_session(
     selected: Option<&AuthMethodInfo>,
 ) -> std::result::Result<Option<SessionId>, AcpError> {
     match cx
-        .send_request(NewSessionRequest::new(cwd.to_path_buf()))
+        .send_request(
+            NewSessionRequest::new(cwd.to_path_buf()).mcp_servers(crate::mcp_supply::wire_servers()),
+        )
         .block_task_setup_deadline()
         .await
     {
