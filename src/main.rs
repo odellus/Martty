@@ -21,6 +21,7 @@ mod logo;
 mod markdown;
 mod mcp_supply;
 mod pet;
+mod harness;
 mod harness_badge;
 mod proto;
 mod runtime;
@@ -199,6 +200,15 @@ fn agent_argv(args: &Args) -> Vec<String> {
         if !tokens.is_empty() {
             return tokens;
         }
+    }
+    // No flag and no environment: resolve the harness from settings.json the way
+    // the npm host would, so the bare binary needs neither.
+    let session_root = args
+        .session_root
+        .clone()
+        .unwrap_or_else(|| default_session_root().to_string_lossy().into_owned());
+    if let Some(harness) = harness::selected(&runtime::settings_path(&session_root)) {
+        return harness.argv();
     }
     vec!["dsh-acp".into()]
 }

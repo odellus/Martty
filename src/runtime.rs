@@ -86,6 +86,14 @@ impl RuntimeConfig {
                 }
             }
         }
+        // A harness configured in settings.json may carry its own environment.
+        // Apply it when that harness is the agent being spawned, and let it win
+        // over the defaults above.
+        if let Some(harness) = crate::harness::selected(&settings_path(&self.session_root)) {
+            if harness.argv().join(" ") == self.bin {
+                env.extend(harness.env);
+            }
+        }
         env
     }
 
@@ -205,4 +213,58 @@ fn yaml_agent_default_model(yaml: &str) -> (Option<String>, Option<String>) {
         }
     }
     (provider, model)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(session_root: &str, bin: &str) -> RuntimeConfig {
+        RuntimeConfig {
+            bin: bin.into(),
+            cordis: "acp".into(),
+            workspace: "/tmp".into(),
+            session_root: session_root.into(),
+            provider: "deepseek-official".into(),
+            model: "deepseek-v4-flash".into(),
+            max_tokens: None,
+            base_url: None,
+            api_key: None,
+        }
+    }
+
+    fn root(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("martty-child-env-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn harness_env_applies_only_to_the_configured_agent() {
+        let dir = root("harness");
+        std::fs::write(
+            dir.join("settings.json"),
+            r#"{"harnesses":[{"id":"h","command":"/bin/agent","args":["acp"],"env":{"HARNESS_KEY":"yes"}}],"defaultHarness":"h"}"#,
+        )
+        .unwrap();
+        let session_root = dir.to_string_lossy().into_owned();
+
+        let matching = cfg(&session_root, "/bin/agent acp");
+        assert!(
+            matching
+                .child_env()
+                .contains(&("HARNESS_KEY".to_owned(), "yes".to_owned())),
+            "the configured harness must supply its own environment"
+        );
+
+        let other = cfg(&session_root, "/bin/other-agent acp");
+        assert!(
+            !other
+                .child_env()
+                .iter()
+                .any(|(key, _)| key == "HARNESS_KEY"),
+            "an agent that is not the configured harness must not inherit its env"
+        );
+    }
 }
