@@ -1755,38 +1755,41 @@ fn meta_line(app: &App, width: usize) -> Line<'static> {
     let lw = left.width();
     let rw: usize = right_spans.iter().map(|s| s.content.width()).sum();
     if lw + rw + 2 > width {
-        // Drop the contextual hints first, but keep the scroll position
-        // beside the model so a longer left-side mode label never hides it.
+        // Graduated fallback: contextual hints, effort and the harness name
+        // go before the model, and the context meter folds to a bare
+        // percentage before anything else is lost — it is the reading the
+        // user watches, so it is the last thing dropped.
         let shown_model = displayed_model(app);
-        let mut compact = Vec::new();
-        if app.scroll_up > 0 {
-            compact.push(Span::styled(
-                format!("↓ {} · ", app.scroll_up),
-                Style::default().fg(theme.caption),
-            ));
-        }
-        compact.extend(harness_spans(app));
-        if let Some(shown_model) = &shown_model {
-            compact.push(Span::styled(
-                format!("{shown_model} "),
-                Style::default().fg(theme.caption),
-            ));
-        }
-        let compact_width = span_widths(&compact);
-        if lw + compact_width + 2 <= width {
-            right_spans = compact;
-        } else if shown_model
-            .as_deref()
-            .is_some_and(|model| lw + model.width() + 3 <= width)
-        {
-            let shown_model = shown_model.expect("checked above");
-            right_spans = vec![Span::styled(
-                format!("{shown_model} "),
-                Style::default().fg(theme.caption),
-            )];
-        } else {
-            right_spans = Vec::new();
-        }
+        let tier = |scroll: bool, harness: bool, model: bool, meter: Option<Span<'static>>| {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            if scroll {
+                spans.extend(scroll_span(app));
+            }
+            if harness {
+                spans.extend(harness_spans(app));
+            }
+            if model {
+                if let Some(shown_model) = &shown_model {
+                    spans.push(Span::styled(
+                        format!("{shown_model} "),
+                        Style::default().fg(theme.caption),
+                    ));
+                }
+            }
+            spans.extend(meter);
+            spans
+        };
+        let tiny = context_meter_span(app, true);
+        right_spans = [
+            tier(true, true, true, context_meter_span(app, false)),
+            tier(true, true, true, tiny.clone()),
+            tier(true, false, true, tiny.clone()),
+            tier(false, false, true, tiny.clone()),
+            tier(false, false, false, tiny),
+        ]
+        .into_iter()
+        .find(|spans| lw + span_widths(spans) + 2 <= width)
+        .unwrap_or_default();
     }
     let rw: usize = right_spans.iter().map(|s| s.content.width()).sum();
     let mut spans = left.spans;
@@ -2039,12 +2042,7 @@ fn status_right(app: &App) -> Vec<Span<'static>> {
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
     }
-    if app.scroll_up > 0 {
-        spans.push(Span::styled(
-            format!("↓ {} · ", app.scroll_up),
-            Style::default().fg(theme.caption),
-        ));
-    }
+    spans.extend(scroll_span(app));
     spans.extend(context_hints(app));
     if app.session_bound {
         spans.extend(harness_spans(app));
@@ -2064,24 +2062,7 @@ fn status_right(app: &App) -> Vec<Span<'static>> {
     // Context-window meter from the agent's `usage_update`. Rendered natively
     // because the composer-dock stats plugin that used to show token flow is
     // Client-side, and without it the meter had nowhere to appear.
-    if let Some(ctx) = app.displayed_transcript().context {
-        let pct = (ctx.fraction() * 100.0).round() as u64;
-        let color = if pct >= 90 {
-            theme.err
-        } else if pct >= 70 {
-            theme.warn_soft()
-        } else {
-            theme.caption
-        };
-        spans.push(Span::styled(
-            format!(
-                " · ctx {}/{} {pct}%",
-                crate::app::fmt_tokens(ctx.used),
-                crate::app::fmt_tokens(ctx.size)
-            ),
-            Style::default().fg(color),
-        ));
-    }
+    spans.extend(context_meter_span(app, false));
     if app.demo {
         spans.push(Span::styled(
             " · demo".to_string(),
@@ -2090,6 +2071,43 @@ fn status_right(app: &App) -> Vec<Span<'static>> {
     }
     spans.push(Span::raw(" "));
     spans
+}
+
+/// Scroll offset chip, shared by the full meta row and its narrow fallbacks.
+fn scroll_span(app: &App) -> Option<Span<'static>> {
+    if app.scroll_up == 0 {
+        return None;
+    }
+    Some(Span::styled(
+        format!("↓ {} · ", app.scroll_up),
+        Style::default().fg(app.theme.caption),
+    ))
+}
+
+/// Context-window meter from the agent's `usage_update`; `None` until the
+/// agent sends one. `compact` trades the used/size reading for a bare
+/// percentage so the meter survives a narrow meta row.
+fn context_meter_span(app: &App, compact: bool) -> Option<Span<'static>> {
+    let ctx = app.displayed_transcript().context?;
+    let pct = (ctx.fraction() * 100.0).round() as u64;
+    let theme = app.theme;
+    let color = if pct >= 90 {
+        theme.err
+    } else if pct >= 70 {
+        theme.warn_soft()
+    } else {
+        theme.caption
+    };
+    let text = if compact {
+        format!(" · ctx {pct}%")
+    } else {
+        format!(
+            " · ctx {}/{} {pct}%",
+            crate::app::fmt_tokens(ctx.used),
+            crate::app::fmt_tokens(ctx.size)
+        )
+    };
+    Some(Span::styled(text, Style::default().fg(color)))
 }
 
 const HARNESS_IMAGE_SPACE: &str = "\u{2007}\u{2007} ";

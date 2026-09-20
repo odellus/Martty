@@ -398,6 +398,53 @@ fn live_meta_row_hides_session_options_until_session_bound() {
 }
 
 #[test]
+fn context_meter_is_the_last_thing_the_narrow_meta_row_drops() {
+    let flat_line = |line: Line| -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+    };
+    let mut app = live_test_app();
+    app.session_bound = true;
+    app.server_info = Some("crow-cli".into());
+    app.selected_model = Some("alibaba:qwen3.8-max".into());
+    app.modes.effort = Some("max".into());
+    app.transcript.context = Some(crate::transcript::ContextUsage {
+        used: 48_500,
+        size: 180_000,
+    });
+
+    let wide = flat_line(meta_line(&app, 160));
+    assert!(wide.contains("ctx 48.5K/180.0K 27%"), "{wide}");
+    assert!(wide.contains(" · max"), "{wide}");
+
+    // Shrink the row one cell at a time: hints, effort, harness and model fall
+    // away in that order, the meter folds to a bare percentage, and only a row
+    // too narrow for anything at all may lose it.
+    let mut seen_tiny = false;
+    let mut tiny_without_model = false;
+    let mut lost = false;
+    for w in (24..160).rev() {
+        let line = flat_line(meta_line(&app, w));
+        let has_full = line.contains("ctx 48.5K/180.0K 27%");
+        let has_tiny = line.contains("ctx 27%");
+        seen_tiny |= has_tiny;
+        tiny_without_model |= has_tiny && !line.contains("qwen");
+        if lost {
+            assert!(!has_full && !has_tiny, "w={w}: meter returned after being dropped: {line}");
+        } else if !has_full && !has_tiny {
+            lost = true;
+            assert!(!line.contains("qwen"), "w={w}: model outlived the meter: {line}");
+        } else {
+            assert!(!(has_full && seen_tiny), "w={w}: full meter after the compact one: {line}");
+        }
+    }
+    assert!(seen_tiny, "meter never folded to its compact form");
+    assert!(tiny_without_model, "meter never outlived the model chip");
+}
+
+#[test]
 fn codex_model_chip_waits_for_acp_then_uses_the_reported_session_model() {
     let flat = |spans: Vec<Span>| -> String {
         spans.iter().map(|s| s.content.as_ref()).collect::<String>()
