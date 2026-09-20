@@ -42,6 +42,15 @@ All notable changes to this project are documented here. The project follows
   their registered token maps. Only Enter confirms and switches the theme
   (loading the owning Plugin and persisting the preference); Esc or moving
   the highlight off the row reverts to the confirmed theme.
+- Four Catppuccin flavors ship in the binary — `catppuccin-latte`,
+  `catppuccin-frappe`, `catppuccin-macchiato` and `catppuccin-mocha` — so
+  `/theme` offers the whole family with no Theme Plugin mounted. Hexes are
+  official palette v1.8.0 with Textual's `catppuccin-*` role mapping; a flavor
+  is entered in the mode it owns (Latte light, the other three dark) and
+  `ctrl+t` toggles inside the family (Macchiato ↔ Latte). The Rust side now
+  owns the persisted `theme` key beside `themeMode`: the chosen pack is
+  restored at startup, and an id this binary does not carry falls back to
+  `default`.
 
 ### Fixed
 

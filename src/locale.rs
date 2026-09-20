@@ -149,11 +149,14 @@ pub struct UiSettings {
     #[serde(rename = "uiPreset")]
     pub ui_preset: String,
     /// Persisted light/dark mode (`dark` | `light`). Absent → the CLI
-    /// `--theme` value or the builtin default. The palette pack id lives
-    /// in the same file under `theme`, owned by the compositor's
-    /// `tuiTheme` service.
+    /// `--theme` value, then the active pack's own preferred mode, then
+    /// the builtin default (dark).
     #[serde(rename = "themeMode")]
     pub theme_mode: Option<String>,
+    /// Persisted palette pack id (`default`, `catppuccin-macchiato`, …).
+    /// Absent — or an id this binary does not carry, e.g. one a Plugin
+    /// registered before it went away — falls back to `default`.
+    pub theme: Option<String>,
     /// Persisted markdown body tone (`single` | `two`). Absent → the
     /// builtin default (`single`: CJK and Latin share the main `fg`).
     #[serde(rename = "markdownTone")]
@@ -166,6 +169,7 @@ impl Default for UiSettings {
             language: Locale::default(),
             ui_preset: default_ui_preset(),
             theme_mode: None,
+            theme: None,
             markdown_tone: None,
         }
     }

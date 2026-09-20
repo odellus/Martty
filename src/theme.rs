@@ -205,6 +205,113 @@ const DEFAULT_LIGHT: TokenMap = TokenMap {
     chip_bg: BLUISH_100,
 };
 
+// --- catppuccin -----------------------------------------------------------
+
+/// The four Catppuccin flavors, palette v1.8.0 (github.com/catppuccin/palette).
+/// The role mapping is Textual's built-in `catppuccin-*` themes — the same four
+/// names crow-cli's own TUI offers — so `bg`/`surface`/`panel`/`fg` and
+/// `brand`/`brand_soft` are Textual's background/surface/panel/foreground and
+/// primary/secondary verbatim: Mocha sits on `mantle`, the other three on
+/// `base`, and Latte's stack is base → mantle → surface0. The two roles Textual
+/// does not name come from the flavor's own scale — body text steps down
+/// text → subtext1 → subtext0 → overlay0, and `border`/`chip_bg` are `surface2`
+/// (Textual's Mocha `border-blurred`). `ok`/`warn`/`err`/`hint` are the
+/// canonical green/yellow/red/teal; Textual's Mocha still carries the pre-1.0
+/// hexes there, its other three flavors already agree.
+const CATPPUCCIN_LATTE: TokenMap = TokenMap {
+    bg: Color::Rgb(239, 241, 245),          // base #eff1f5
+    surface: Color::Rgb(230, 233, 239),     // mantle #e6e9ef
+    panel: Color::Rgb(204, 208, 218),       // surface0 #ccd0da
+    fg: Color::Rgb(76, 79, 105),            // text #4c4f69
+    fg_secondary: Color::Rgb(92, 95, 119),  // subtext1 #5c5f77
+    fg_tertiary: Color::Rgb(108, 111, 133), // subtext0 #6c6f85
+    caption: Color::Rgb(156, 160, 176),     // overlay0 #9ca0b0
+    brand: Color::Rgb(136, 57, 239),        // mauve #8839ef
+    brand_soft: Color::Rgb(220, 138, 120),  // rosewater #dc8a78
+    bubble_bg: Color::Rgb(204, 208, 218),   // surface0 #ccd0da
+    bubble_fg: Color::Rgb(76, 79, 105),     // text #4c4f69
+    border: Color::Rgb(172, 176, 190),      // surface2 #acb0be
+    code_bg: Color::Rgb(230, 233, 239),     // mantle #e6e9ef
+    ok: Color::Rgb(64, 160, 43),            // green #40a02b
+    warn: Color::Rgb(223, 142, 29),         // yellow #df8e1d
+    err: Color::Rgb(210, 15, 57),           // red #d20f39
+    hint: Color::Rgb(23, 146, 153),         // teal #179299
+    chip_bg: Color::Rgb(172, 176, 190),     // surface2 #acb0be
+};
+
+const CATPPUCCIN_FRAPPE: TokenMap = TokenMap {
+    bg: Color::Rgb(48, 52, 70),              // base #303446
+    surface: Color::Rgb(65, 69, 89),         // surface0 #414559
+    panel: Color::Rgb(81, 87, 109),          // surface1 #51576d
+    fg: Color::Rgb(198, 208, 245),           // text #c6d0f5
+    fg_secondary: Color::Rgb(181, 191, 226), // subtext1 #b5bfe2
+    fg_tertiary: Color::Rgb(165, 173, 206),  // subtext0 #a5adce
+    caption: Color::Rgb(115, 121, 148),      // overlay0 #737994
+    brand: Color::Rgb(202, 158, 230),        // mauve #ca9ee6
+    brand_soft: Color::Rgb(239, 159, 118),   // peach #ef9f76
+    bubble_bg: Color::Rgb(81, 87, 109),      // surface1 #51576d
+    bubble_fg: Color::Rgb(198, 208, 245),    // text #c6d0f5
+    border: Color::Rgb(98, 104, 128),        // surface2 #626880
+    code_bg: Color::Rgb(65, 69, 89),         // surface0 #414559
+    ok: Color::Rgb(166, 209, 137),           // green #a6d189
+    warn: Color::Rgb(229, 200, 144),         // yellow #e5c890
+    err: Color::Rgb(231, 130, 132),          // red #e78284
+    hint: Color::Rgb(129, 200, 190),         // teal #81c8be
+    chip_bg: Color::Rgb(98, 104, 128),       // surface2 #626880
+};
+
+const CATPPUCCIN_MACCHIATO: TokenMap = TokenMap {
+    bg: Color::Rgb(36, 39, 58),              // base #24273a
+    surface: Color::Rgb(54, 58, 79),         // surface0 #363a4f
+    panel: Color::Rgb(73, 77, 100),          // surface1 #494d64
+    fg: Color::Rgb(202, 211, 245),           // text #cad3f5
+    fg_secondary: Color::Rgb(184, 192, 224), // subtext1 #b8c0e0
+    fg_tertiary: Color::Rgb(165, 173, 203),  // subtext0 #a5adcb
+    caption: Color::Rgb(110, 115, 141),      // overlay0 #6e738d
+    brand: Color::Rgb(198, 160, 246),        // mauve #c6a0f6
+    brand_soft: Color::Rgb(245, 169, 127),   // peach #f5a97f
+    bubble_bg: Color::Rgb(73, 77, 100),      // surface1 #494d64
+    bubble_fg: Color::Rgb(202, 211, 245),    // text #cad3f5
+    border: Color::Rgb(91, 96, 120),         // surface2 #5b6078
+    code_bg: Color::Rgb(54, 58, 79),         // surface0 #363a4f
+    ok: Color::Rgb(166, 218, 149),           // green #a6da95
+    warn: Color::Rgb(238, 212, 159),         // yellow #eed49f
+    err: Color::Rgb(237, 135, 150),          // red #ed8796
+    hint: Color::Rgb(139, 213, 202),         // teal #8bd5ca
+    chip_bg: Color::Rgb(91, 96, 120),        // surface2 #5b6078
+};
+
+const CATPPUCCIN_MOCHA: TokenMap = TokenMap {
+    bg: Color::Rgb(24, 24, 37),              // mantle #181825
+    surface: Color::Rgb(49, 50, 68),         // surface0 #313244
+    panel: Color::Rgb(69, 71, 90),           // surface1 #45475a
+    fg: Color::Rgb(205, 214, 244),           // text #cdd6f4
+    fg_secondary: Color::Rgb(186, 194, 222), // subtext1 #bac2de
+    fg_tertiary: Color::Rgb(166, 173, 200),  // subtext0 #a6adc8
+    caption: Color::Rgb(108, 112, 134),      // overlay0 #6c7086
+    brand: Color::Rgb(245, 194, 231),        // pink #f5c2e7
+    brand_soft: Color::Rgb(203, 166, 247),   // mauve #cba6f7
+    bubble_bg: Color::Rgb(69, 71, 90),       // surface1 #45475a
+    bubble_fg: Color::Rgb(205, 214, 244),    // text #cdd6f4
+    border: Color::Rgb(88, 91, 112),         // surface2 #585b70
+    code_bg: Color::Rgb(49, 50, 68),         // surface0 #313244
+    ok: Color::Rgb(166, 227, 161),           // green #a6e3a1
+    warn: Color::Rgb(249, 226, 175),         // yellow #f9e2af
+    err: Color::Rgb(243, 139, 168),          // red #f38ba8
+    hint: Color::Rgb(148, 226, 213),         // teal #94e2d5
+    chip_bg: Color::Rgb(88, 91, 112),        // surface2 #585b70
+};
+
+/// The ids [`PalettePack::builtin_packs`] carries, in picker order. What the
+/// `/theme` menu calls a builtin rather than a theme plugin.
+pub const BUILTIN_PALETTE_IDS: &[&str] = &[
+    "default",
+    "catppuccin-latte",
+    "catppuccin-frappe",
+    "catppuccin-macchiato",
+    "catppuccin-mocha",
+];
+
 /// Why a protocol-0 palette was rejected. Wrong `protocol` is not an error:
 /// the compositor ignores it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +336,11 @@ pub struct PalettePack {
     pub loaded: bool,
     /// Optional terminal background owned by this theme pack.
     pub background: Option<ThemeBackground>,
+    /// The mode this pack is committed in, when it owns one: a built-in
+    /// flavor is dark or light by nature (Catppuccin Latte *is* the light
+    /// theme). `None` — every Plugin-registered pack, and `default` — keeps
+    /// whichever mode is already in effect.
+    pub preferred_mode: Option<Mode>,
     dark: TokenMap,
     light: TokenMap,
 }
@@ -270,9 +382,61 @@ impl PalettePack {
             source: "static".into(),
             loaded: true,
             background: None,
+            preferred_mode: None,
             dark: DEFAULT_DARK,
             light: DEFAULT_LIGHT,
         }
+    }
+
+    /// One built-in Catppuccin flavor. `dark` is the flavor itself — Latte
+    /// pairs with Mocha — and `light` is always Latte, so ctrl+t still means
+    /// something inside the family: Macchiato ↔ Latte.
+    fn catppuccin(id: &str, label: &str, dark: TokenMap, preferred: Mode) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            plugin_id: None,
+            source: "static".into(),
+            loaded: true,
+            background: None,
+            preferred_mode: Some(preferred),
+            dark,
+            light: CATPPUCCIN_LATTE,
+        }
+    }
+
+    /// Every pack the binary carries with no Plugin mounted: `default` plus
+    /// the four Catppuccin flavors. `default` is always first and always
+    /// present — the fallback for a persisted id this build does not know.
+    /// The ids are [`BUILTIN_PALETTE_IDS`], in the same order.
+    pub fn builtin_packs() -> Vec<Self> {
+        vec![
+            Self::builtin_default(),
+            Self::catppuccin(
+                "catppuccin-latte",
+                "Catppuccin Latte",
+                CATPPUCCIN_MOCHA,
+                Mode::Light,
+            ),
+            Self::catppuccin(
+                "catppuccin-frappe",
+                "Catppuccin Frappé",
+                CATPPUCCIN_FRAPPE,
+                Mode::Dark,
+            ),
+            Self::catppuccin(
+                "catppuccin-macchiato",
+                "Catppuccin Macchiato",
+                CATPPUCCIN_MACCHIATO,
+                Mode::Dark,
+            ),
+            Self::catppuccin(
+                "catppuccin-mocha",
+                "Catppuccin Mocha",
+                CATPPUCCIN_MOCHA,
+                Mode::Dark,
+            ),
+        ]
     }
 
     /// Current-mode `Theme` for this pack. Toggle stays inside these maps.
@@ -313,6 +477,7 @@ impl PalettePack {
             source: "static".into(),
             loaded: true,
             background,
+            preferred_mode: None,
             dark,
             light,
         })

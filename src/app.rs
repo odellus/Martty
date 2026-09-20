@@ -1284,10 +1284,13 @@ pub struct App {
     pub palettes: Vec<crate::theme::PalettePack>,
     pub active_palette_id: String,
     /// Palette currently only *previewed* (dialog row or `/theme ` slash
-    /// candidate under the highlight) but not yet confirmed with Enter.
-    /// Preview repaints `theme` without touching `active_palette_id`, so
-    /// Esc or a moved highlight reverts to the committed theme.
-    theme_preview: Option<String>,
+    /// candidate under the highlight) but not yet confirmed with Enter,
+    /// paired with the committed mode to put back once it is dropped: a
+    /// pack that owns a mode previews in it, and that is not necessarily
+    /// the mode in effect. Preview repaints `theme` without touching
+    /// `active_palette_id`, so Esc or a moved highlight reverts to the
+    /// committed theme.
+    theme_preview: Option<(String, crate::theme::Mode)>,
     /// Palette confirmed with Enter whose Theme Plugin has not delivered
     /// its loaded palette yet. The preview colors stay on screen (no flash
     /// back to the old theme) until the palette arrival commits it.
@@ -1820,16 +1823,30 @@ impl App {
         attached: bool,
         bus_tx: Sender<AppEvent>,
     ) -> Self {
-        let palettes = vec![crate::theme::PalettePack::builtin_default()];
+        let palettes = crate::theme::PalettePack::builtin_packs();
         let settings = Self::load_settings(&cfg);
+        // The persisted pack id. An id this binary does not carry — a Plugin
+        // pack from an older install — falls back to the builtin default.
+        let active_palette_id = settings
+            .theme
+            .as_deref()
+            .filter(|id| palettes.iter().any(|pack| pack.id == **id))
+            .unwrap_or("default")
+            .to_string();
+        let active = palettes
+            .iter()
+            .find(|pack| pack.id == active_palette_id)
+            .expect("`default` is always a builtin pack");
         // Explicit `--theme` on the CLI wins; otherwise the persisted
-        // light/dark mode; otherwise the builtin default (dark).
+        // light/dark mode; otherwise the pack's own preferred mode (Latte is
+        // a light theme); otherwise the builtin default (dark).
         let mode = theme
             .as_ref()
             .map(|t| t.mode)
             .or_else(|| settings.theme_mode.as_deref().and_then(crate::theme::Mode::parse))
+            .or(active.preferred_mode)
             .unwrap_or(crate::theme::Mode::Dark);
-        let theme = palettes[0].theme(mode);
+        let theme = active.theme(mode);
         let locale = settings.language;
         // Persisted markdown body tone (`single` | `two`); absent → single.
         let tone_mode = settings
@@ -1842,7 +1859,7 @@ impl App {
             locale,
             tone_mode,
             palettes,
-            active_palette_id: "default".into(),
+            active_palette_id,
             theme_preview: None,
             theme_pending: None,
             ui_preset: settings.ui_preset,
@@ -2544,15 +2561,23 @@ impl App {
     }
 
     fn activate_palette(&mut self, id: &str) {
-        if !self.palettes.iter().any(|p| p.id == id) {
+        let Some(pack) = self.palettes.iter().find(|p| p.id == id) else {
             return;
-        }
+        };
+        let preferred = pack.preferred_mode;
         // A commit (Enter, or the palette arrival of a pending Enter)
         // supersedes any preview still on screen.
         self.theme_preview = None;
         self.theme_pending = None;
         self.active_palette_id = id.to_string();
+        // A pack that owns a mode is entered in it: picking Catppuccin Latte
+        // means a light UI, not Latte's dark counterpart. Packs that own none
+        // (every Plugin pack, `default`) keep the mode already in effect.
+        if let Some(mode) = preferred {
+            self.theme.mode = mode;
+        }
         self.sync_theme_from_active();
+        self.save_settings();
         self.show_tip(self.locale.trf(
             "theme: {} {}",
             "主题：{} {}",
@@ -2586,9 +2611,9 @@ impl App {
             // palette arrival converts the pending preview into the
             // committed theme (`activate_palette`).
             if self.active_palette_id != id {
-                let mode = self.theme.mode;
-                self.theme = palette.theme(mode);
-                self.theme_preview = Some(id.to_string());
+                let committed = self.committed_theme_mode();
+                self.theme = palette.theme(palette.preferred_mode.unwrap_or(committed));
+                self.theme_preview = Some((id.to_string(), committed));
                 self.theme_pending = Some(id.to_string());
                 self.needs_redraw = true;
             }
@@ -2610,6 +2635,15 @@ impl App {
         }
     }
 
+    /// The mode the committed palette is painted in. While a preview is
+    /// live, `theme.mode` belongs to the previewed pack, so the committed
+    /// mode is the one the preview recorded when it started.
+    fn committed_theme_mode(&self) -> crate::theme::Mode {
+        self.theme_preview
+            .as_ref()
+            .map_or(self.theme.mode, |(_, mode)| *mode)
+    }
+
     /// Live-switch the painter to a palette's colors without committing it:
     /// arrows over the theme dialog rows or the `/theme ` slash candidates
     /// only *preview*. The committed palette stays `active_palette_id`
@@ -2622,12 +2656,20 @@ impl App {
             self.clear_theme_preview();
             return;
         }
-        let Some(pack) = self.palettes.iter().find(|palette| palette.id == id) else {
+        let committed = self.committed_theme_mode();
+        // A pack that owns a mode previews in it: arrowing onto Catppuccin
+        // Latte shows Latte, which is what Enter will commit — not the dark
+        // counterpart the current mode would otherwise pick out of it.
+        let Some(preview) = self
+            .palettes
+            .iter()
+            .find(|palette| palette.id == id)
+            .map(|pack| pack.theme(pack.preferred_mode.unwrap_or(committed)))
+        else {
             return;
         };
-        let mode = self.theme.mode;
-        self.theme = pack.theme(mode);
-        self.theme_preview = Some(id.to_string());
+        self.theme = preview;
+        self.theme_preview = Some((id.to_string(), committed));
         // A different palette was previewed → the pending Enter commit for
         // the previous one is stale; only Enter re-arms it.
         if self.theme_pending.as_deref().is_some_and(|pending| pending != id) {
@@ -2638,15 +2680,22 @@ impl App {
 
     /// Drop a pending palette preview and repaint the committed theme.
     fn clear_theme_preview(&mut self) {
-        if self.theme_preview.take().is_some() || self.theme_pending.is_some() {
+        let committed = self.theme_preview.take().map(|(_, mode)| mode);
+        if committed.is_some() || self.theme_pending.is_some() {
             self.theme_pending = None;
+            // A flavor pack previewed in its own mode: put the committed
+            // mode back before repainting, or Esc would leave the committed
+            // pack in the preview's light/dark.
+            if let Some(mode) = committed {
+                self.theme.mode = mode;
+            }
             self.sync_theme_from_active();
             self.needs_redraw = true;
         }
     }
 
-    /// The palette candidate under the open `/theme ` slash popup highlight,
-    /// if the row names a registered pack (never the dark/light toggle row).
+    /// The palette id under the open `/theme ` slash popup highlight — never
+    /// the dark/light toggle row. Callers resolve it against the catalog.
     fn slash_theme_candidate(&self) -> Option<String> {
         if self.slash_completion_dismissed {
             return None;
@@ -2663,6 +2712,7 @@ impl App {
             .completion
             .as_deref()
             .and_then(|completion| completion.strip_prefix("/theme "))
+            .filter(|arg| *arg != "toggle")
             .map(str::to_string)
     }
 
@@ -2692,12 +2742,8 @@ impl App {
     /// ends here, so Esc, a closed list, a moved highlight or an edited
     /// draft reverts to the committed theme — preview never sticks.
     fn reconcile_theme_preview(&mut self) {
-        if self.theme_preview.is_none() {
+        let Some((preview, _)) = self.theme_preview.clone() else {
             return;
-        }
-        let preview = match self.theme_preview.clone() {
-            Some(preview) => preview,
-            None => return,
         };
         let still_highlighted = self.picker.as_ref().is_some_and(|picker| {
             picker.kind == PickerKind::Theme
@@ -2733,15 +2779,23 @@ impl App {
     }
 
     fn toggle_theme_mode(&mut self) {
-        self.theme = self.theme.toggled();
+        // Toggle the *committed* mode: a live preview paints a pack that may
+        // own its own mode, and ctrl+t is about the theme you keep.
+        let next = match self.committed_theme_mode() {
+            crate::theme::Mode::Dark => crate::theme::Mode::Light,
+            crate::theme::Mode::Light => crate::theme::Mode::Dark,
+        };
+        match self.theme_preview.as_mut() {
+            // The preview keeps painting its own pack; only the mode Esc
+            // falls back to changes.
+            Some((_, committed)) => *committed = next,
+            None => self.theme = self.theme.toggled(),
+        }
         self.save_settings();
         self.show_tip(self.locale.trf(
             "theme: {} {}",
             "主题：{} {}",
-            &[
-                self.active_palette_id.clone(),
-                self.theme.mode.as_str().to_string(),
-            ],
+            &[self.active_palette_id.clone(), next.as_str().to_string()],
         ));
     }
 
@@ -3111,7 +3165,7 @@ impl App {
                     ("theme", "toggle") => {
                         Some(self.locale.tr("Appearance", "明暗模式").to_string())
                     }
-                    ("theme", _) => Some("Theme Plugins".to_string()),
+                    ("theme", _) => Some(self.locale.tr("Themes", "主题包").to_string()),
                     _ => None,
                 },
                 name: name.to_string(),
@@ -3257,13 +3311,15 @@ impl App {
                         .to_string(),
                 )];
                 options.extend(self.palettes.iter().map(|palette| {
+                    let builtin = crate::theme::BUILTIN_PALETTE_IDS
+                        .contains(&palette.id.as_str());
                     (
                         palette.id.clone(),
                         palette.label.clone(),
-                        if palette.loaded {
-                            "theme plugin".to_string()
-                        } else {
-                            "theme plugin · stopped".to_string()
+                        match (builtin, palette.loaded) {
+                            (_, false) => "theme plugin · stopped".to_string(),
+                            (true, _) => "builtin".to_string(),
+                            (false, _) => "theme plugin".to_string(),
                         },
                     )
                 }));
@@ -5602,9 +5658,9 @@ impl App {
         {
             Some(value) => value,
             None => {
-                // The same file carries compositor-owned keys (theme,
-                // uiPreset, harness recipes). An unparseable file must not be
-                // silently replaced with `{}`: keep it for recovery.
+                // The same file carries compositor-owned keys (uiPreset,
+                // harness recipes). An unparseable file must not be silently
+                // replaced with `{}`: keep it for recovery.
                 if existing
                     .as_deref()
                     .is_some_and(|text| !text.trim().is_empty())
@@ -5615,7 +5671,8 @@ impl App {
             }
         };
         current["language"] = serde_json::json!(self.locale);
-        current["themeMode"] = serde_json::json!(self.theme.mode.as_str());
+        current["theme"] = serde_json::json!(self.active_palette_id);
+        current["themeMode"] = serde_json::json!(self.committed_theme_mode().as_str());
         current["markdownTone"] = serde_json::json!(self.tone_mode.as_str());
         if let Ok(text) = serde_json::to_string_pretty(&current) {
             let _ = write_settings_atomic(&path, &text);

@@ -233,7 +233,10 @@ Rust 画布     输入、keymap、Client FIFO、现有 widget 读 Theme/slot、k
 | TUI 壳 | TTY、输入、compositor；消费插件提供的结构化 slot/overlay snapshot | 拥有 Plan/统计等业务投影，或解释 harness `SessionEvent` |
 | Rust | 把 Theme 画进现有 widget | 在 JS 里解释颜色 |
 
-本体只有内置 `default`。动态 Theme Plugin 用 `tuiTheme.register` 声明 palette；
+本体内置 `default` 与四款 Catppuccin 风味（Latte / Frappé / Macchiato / Mocha，
+色值取自官方 palette v1.8.0，角色映射对齐 Textual 内置的 `catppuccin-*` 主题）；
+Latte 自带 light 模式，其余三款自带 dark 模式，选中即以其模式呈现，选择与明暗
+一并写入 `settings.json` 的 `theme` / `themeMode`。动态 Theme Plugin 用 `tuiTheme.register` 声明 palette；
 `/theme` 是特殊的单选 Plugin 开关，启动目标 Plugin 并停止当前 Theme Plugin，因而
 palette、command、overlay、slot 与 RPC 随同一个 Fiber 一起上下线。`martty --demo`
 保持 `default`；`--demo-skin` 仍是静态 gallery 演示路径。常驻 gallery 包

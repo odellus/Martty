@@ -291,3 +291,142 @@ fn palette_notification_carries_dynamic_plugin_ownership_and_load_state() {
     assert_eq!(notification.pack.source, "dynamic");
     assert!(!notification.pack.loaded);
 }
+
+/// `#rrggbb` → the painter's color, so the assertions below read like the
+/// official palette table they came from.
+fn rgb(hex: &str) -> Color {
+    let n = u32::from_str_radix(hex.trim_start_matches('#'), 16).expect("hex");
+    Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8)
+}
+
+fn builtin(id: &str) -> PalettePack {
+    PalettePack::builtin_packs()
+        .into_iter()
+        .find(|pack| pack.id == id)
+        .unwrap_or_else(|| panic!("no builtin pack `{id}`"))
+}
+
+/// The catalog the binary carries with no Plugin mounted is exactly
+/// `BUILTIN_PALETTE_IDS` — what `/theme` labels `builtin` and what a
+/// persisted `theme` id is resolved against.
+#[test]
+fn builtin_packs_are_the_catalog_the_menu_calls_builtin() {
+    let packs = PalettePack::builtin_packs();
+    let ids = packs
+        .iter()
+        .map(|pack| pack.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, BUILTIN_PALETTE_IDS);
+    assert_eq!(packs[0].id, "default", "the fallback pack is first");
+    assert_eq!(packs[0].preferred_mode, None, "`default` owns no mode");
+    for pack in &packs {
+        assert_eq!(pack.source, "static", "{} ships in the binary", pack.id);
+        assert!(pack.loaded, "{} needs no Plugin mounted", pack.id);
+        assert_eq!(pack.plugin_id, None, "{} has no owner", pack.id);
+        assert!(!pack.label.is_empty(), "{} names itself", pack.id);
+        assert_eq!(pack.background, None);
+    }
+}
+
+/// A flavor owns its mode: Latte *is* the light theme, the other three are
+/// dark — so picking one enters it in that mode instead of inheriting
+/// whatever the previous pack left behind.
+#[test]
+fn catppuccin_flavors_own_their_mode() {
+    assert_eq!(
+        builtin("catppuccin-latte").preferred_mode,
+        Some(Mode::Light)
+    );
+    for id in [
+        "catppuccin-frappe",
+        "catppuccin-macchiato",
+        "catppuccin-mocha",
+    ] {
+        assert_eq!(builtin(id).preferred_mode, Some(Mode::Dark), "{id}");
+    }
+}
+
+/// The hexes a flavor is recognized by, straight out of palette v1.8.0
+/// (github.com/catppuccin/palette): Textual's background/foreground/primary
+/// plus the canonical green/yellow/red/teal.
+#[test]
+fn catppuccin_flavors_carry_the_canonical_palette_hexes() {
+    //       id                       mode        bg        fg        brand     ok        warn      err       hint
+    for (id, mode, bg, fg, brand, ok, warn, err, hint) in [
+        (
+            "catppuccin-latte",
+            Mode::Light,
+            "#eff1f5", // base
+            "#4c4f69", // text
+            "#8839ef", // mauve
+            "#40a02b", // green
+            "#df8e1d", // yellow
+            "#d20f39", // red
+            "#179299", // teal
+        ),
+        (
+            "catppuccin-frappe",
+            Mode::Dark,
+            "#303446", // base
+            "#c6d0f5", // text
+            "#ca9ee6", // mauve
+            "#a6d189", // green
+            "#e5c890", // yellow
+            "#e78284", // red
+            "#81c8be", // teal
+        ),
+        (
+            "catppuccin-macchiato",
+            Mode::Dark,
+            "#24273a", // base
+            "#cad3f5", // text
+            "#c6a0f6", // mauve
+            "#a6da95", // green
+            "#eed49f", // yellow
+            "#ed8796", // red
+            "#8bd5ca", // teal
+        ),
+        (
+            "catppuccin-mocha",
+            Mode::Dark,
+            "#181825", // mantle
+            "#cdd6f4", // text
+            "#f5c2e7", // pink
+            "#a6e3a1", // green
+            "#f9e2af", // yellow
+            "#f38ba8", // red
+            "#94e2d5", // teal
+        ),
+    ] {
+        let theme = builtin(id).theme(mode);
+        assert_eq!(theme.mode, mode, "{id}");
+        assert_eq!(theme.bg, rgb(bg), "{id} bg");
+        assert_eq!(theme.fg, rgb(fg), "{id} fg");
+        assert_eq!(theme.brand, rgb(brand), "{id} brand");
+        assert_eq!(theme.ok, rgb(ok), "{id} ok");
+        assert_eq!(theme.warn, rgb(warn), "{id} warn");
+        assert_eq!(theme.err, rgb(err), "{id} err");
+        assert_eq!(theme.hint, rgb(hint), "{id} hint");
+    }
+}
+
+/// ctrl+t stays inside the family: every flavor's light slot is Latte, and
+/// Latte's dark slot is Mocha — toggling never falls back to DeepSeek blue.
+#[test]
+fn catppuccin_toggle_stays_inside_the_family() {
+    let macchiato = builtin("catppuccin-macchiato").theme(Mode::Dark);
+    assert_eq!(macchiato.bg, rgb("#24273a"));
+    assert_eq!(macchiato.brand, rgb("#c6a0f6"));
+    let toggled = macchiato.toggled();
+    assert_eq!(toggled.mode, Mode::Light);
+    assert_eq!(toggled.bg, rgb("#eff1f5"), "Latte base");
+    assert_eq!(toggled.brand, rgb("#8839ef"), "Latte mauve");
+
+    let latte = builtin("catppuccin-latte");
+    assert_eq!(latte.theme(Mode::Light).bg, rgb("#eff1f5"));
+    assert_eq!(
+        latte.theme(Mode::Dark).bg,
+        rgb("#181825"),
+        "Latte's dark counterpart is Mocha's mantle"
+    );
+}

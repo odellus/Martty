@@ -16,8 +16,8 @@ fn fresh_root() -> String {
     dir.to_string_lossy().into_owned()
 }
 
-fn test_app() -> (App, Controller, Receiver<AppEvent>) {
-    let cfg = RuntimeConfig {
+fn test_cfg() -> RuntimeConfig {
+    RuntimeConfig {
         bin: "demo".into(),
         cordis: "demo".into(),
         workspace: "/tmp".into(),
@@ -28,11 +28,32 @@ fn test_app() -> (App, Controller, Receiver<AppEvent>) {
         base_url: None,
         api_key: None,
         startup_session: None,
-    };
+    }
+}
+
+fn test_app() -> (App, Controller, Receiver<AppEvent>) {
+    let cfg = test_cfg();
     let (tx, rx) = std::sync::mpsc::channel::<AppEvent>();
     let ctl = Controller::start(cfg.clone(), true, None, tx.clone());
     let app = App::new(Some(Theme::dark()), cfg, "dsh-test".into(), true, false, tx);
     (app, ctl, rx)
+}
+
+/// An `App` started over a `settings.json` seeded with `seed` and with no
+/// CLI `--theme` — the restart path where the persisted palette must speak.
+fn restarted_app(seed: serde_json::Value) -> (App, Receiver<AppEvent>) {
+    let cfg = test_cfg();
+    let path = crate::runtime::settings_path(&cfg.session_root);
+    std::fs::write(&path, seed.to_string()).expect("seed settings.json");
+    let (tx, rx) = std::sync::mpsc::channel::<AppEvent>();
+    (App::new(None, cfg, "restart".into(), true, false, tx), rx)
+}
+
+/// The `settings.json` this app writes its palette choice to.
+fn saved_settings(app: &App) -> serde_json::Value {
+    let path = crate::runtime::settings_path(&app.cfg.session_root);
+    serde_json::from_str(&std::fs::read_to_string(path).expect("settings.json written"))
+        .expect("settings.json is valid JSON")
 }
 
 fn ember_params(activate: bool) -> serde_json::Value {
@@ -55,6 +76,78 @@ fn gallery_params(id: &str, activate: bool) -> serde_json::Value {
     };
     let palette: serde_json::Value = serde_json::from_str(fixture).unwrap();
     json!({"protocol": 0, "palette": palette, "activate": activate})
+}
+
+/// The palette catalog: the builtin packs, then every Plugin pack in
+/// registration order.
+fn catalog(app: &App) -> Vec<String> {
+    app.palettes.iter().map(|pack| pack.id.clone()).collect()
+}
+
+/// The builtin ids, then `extra` — what the catalog looks like once the
+/// Plugin packs under test have registered.
+fn builtin_catalog(extra: &[&str]) -> Vec<String> {
+    crate::theme::BUILTIN_PALETTE_IDS
+        .iter()
+        .map(|id| id.to_string())
+        .chain(extra.iter().map(|id| id.to_string()))
+        .collect()
+}
+
+/// The open theme picker's row ids, in display order.
+fn picker_ids(app: &App) -> Vec<String> {
+    let picker = app.picker.as_ref().expect("theme picker open");
+    picker.items.iter().map(|item| item.id.clone()).collect()
+}
+
+/// Move the open theme picker's highlight onto `id` with ↑↓, previewing
+/// every row it passes — the path a user's arrows take.
+fn picker_walk_to(app: &mut App, ctl: &Controller, id: &str) {
+    let (sel, target) = {
+        let picker = app.picker.as_ref().expect("theme picker open");
+        (
+            picker.sel,
+            picker
+                .items
+                .iter()
+                .position(|item| item.id == id)
+                .unwrap_or_else(|| panic!("no `{id}` row in the picker")),
+        )
+    };
+    let (key, steps) = if target >= sel {
+        (KeyCode::Down, target - sel)
+    } else {
+        (KeyCode::Up, sel - target)
+    };
+    for _ in 0..steps {
+        app.handle(
+            AppEvent::Term(Event::Key(KeyEvent::new(key, KeyModifiers::NONE))),
+            ctl,
+        );
+    }
+    let picker = app.picker.as_ref().expect("walking keeps the picker open");
+    assert_eq!(picker.items[picker.sel].id, id, "highlight lands on {id}");
+}
+
+/// Move the open `/theme ` popup's highlight onto the candidate `id`.
+fn slash_walk_to(app: &mut App, ctl: &Controller, id: &str) {
+    for _ in 0..app.palettes.len() + 2 {
+        if app.slash_theme_candidate().as_deref() == Some(id) {
+            return;
+        }
+        app.handle(
+            AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+            ctl,
+        );
+    }
+    panic!("no `{id}` candidate under the highlight");
+}
+
+fn down(app: &mut App, ctl: &Controller) {
+    app.handle(
+        AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))),
+        ctl,
+    );
 }
 
 #[test]
@@ -295,8 +388,14 @@ fn stopped_dynamic_theme_stays_selectable_without_painting_until_restored() {
     assert!(app.palettes.iter().any(|palette| palette.id == "ember"));
     app.open_theme_picker();
     let picker = app.picker.as_ref().expect("theme picker");
+    assert_eq!(picker.items[0].id, "default");
     assert_eq!(picker.items[0].meta, "static · active");
-    assert_eq!(picker.items[1].meta, "dynamic · stopped");
+    let stopped = picker
+        .items
+        .iter()
+        .find(|item| item.id == "ember")
+        .expect("a stopped pack stays selectable");
+    assert_eq!(stopped.meta, "dynamic · stopped");
     let (client_ctl, commands) = crate::controller::tests::test_controller();
     app.run_slash("theme", "ember", &client_ctl);
     assert_eq!(app.active_palette_id, "default");
@@ -338,10 +437,13 @@ fn slash_theme_options_match_the_picker_catalog() {
         .filter_map(|entry| entry.completion)
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        completions,
-        ["/theme toggle", "/theme default", "/theme ember"]
+    let mut expected = vec!["/theme toggle".to_string()];
+    expected.extend(
+        builtin_catalog(&["ember"])
+            .iter()
+            .map(|id| format!("/theme {id}")),
     );
+    assert_eq!(completions, expected);
 }
 
 #[test]
@@ -356,26 +458,25 @@ fn theme_picker_can_leave_and_return_to_a_dynamic_plugin_pack() {
     );
 
     app.run_slash("theme", "", &ctl);
+    assert_eq!(picker_ids(&app), builtin_catalog(&["ember"]));
     let picker = app
         .picker
         .as_ref()
         .expect("/theme opens the palette picker");
     assert_eq!(
-        picker
-            .items
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<Vec<_>>(),
-        ["default", "ember"]
+        picker.sel,
+        crate::theme::BUILTIN_PALETTE_IDS.len(),
+        "the active dynamic pack is preselected"
     );
-    assert_eq!(picker.sel, 1, "the active dynamic pack is preselected");
 
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))), &ctl);
+    // Home jumps to the top of the catalog; Enter leaves the Plugin pack.
+    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE))), &ctl);
     app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))), &ctl);
     assert_eq!(app.active_palette_id, "default");
 
+    // …and arrowing back down the catalog returns to it.
     app.run_slash("theme", "", &ctl);
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
+    picker_walk_to(&mut app, &ctl, "ember");
     app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))), &ctl);
     assert_eq!(app.active_palette_id, "ember");
     assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
@@ -447,20 +548,12 @@ fn theme_dialog_arrows_preview_and_only_enter_commits() {
         &ctl,
     );
     app.run_slash("theme", "", &ctl);
-    let picker = app.picker.as_ref().expect("theme picker opens");
-    assert_eq!(
-        picker
-            .items
-            .iter()
-            .map(|item| item.id.as_str())
-            .collect::<Vec<_>>(),
-        ["default", "ember", "ayu"]
-    );
+    assert_eq!(picker_ids(&app), builtin_catalog(&["ember", "ayu"]));
     assert_eq!(app.active_palette_id, "default");
 
-    // One ↓ lands on ember: the painter previews ember immediately, but the
-    // committed theme is still "default" — arrows never confirm.
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
+    // Arrowing onto ember previews it immediately, but the committed theme is
+    // still "default" — arrows never confirm.
+    picker_walk_to(&mut app, &ctl, "ember");
     assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60)); // ember dark brand
     assert_eq!(
         app.active_palette_id, "default",
@@ -472,7 +565,7 @@ fn theme_dialog_arrows_preview_and_only_enter_commits() {
     );
 
     // ↓ again → ayu preview, still uncommitted.
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
+    down(&mut app, &ctl);
     assert_eq!(app.active_palette_id, "default");
     assert!(app.picker.is_some());
 
@@ -481,8 +574,8 @@ fn theme_dialog_arrows_preview_and_only_enter_commits() {
     assert_eq!(app.theme.brand, DEEPSEEK_450);
     assert_eq!(app.active_palette_id, "default");
 
-    // ↓ to ember, then Enter confirms: dialog closes and ember commits.
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
+    // Back down to ember, then Enter confirms: dialog closes, ember commits.
+    picker_walk_to(&mut app, &ctl, "ember");
     assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
     assert_eq!(app.active_palette_id, "default", "still only previewed");
     app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))), &ctl);
@@ -504,11 +597,14 @@ fn theme_dialog_esc_reverts_the_preview_to_the_committed_theme() {
     app.run_slash("theme", "", &ctl);
     assert_eq!(app.theme.brand, DEEPSEEK_450);
 
-    // Preview ember with ↓ and with the wheel…
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
+    // Preview ember with ↓…
+    picker_walk_to(&mut app, &ctl, "ember");
     assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))), &ctl);
+    // …Home back onto the committed row drops it again…
+    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE))), &ctl);
     assert_eq!(app.theme.brand, DEEPSEEK_450);
+    // …and one wheel notch previews the pack it lands on — Catppuccin Latte,
+    // which owns a light mode, so the preview carries that mode with it.
     app.handle(
         AppEvent::Term(Event::Mouse(crossterm::event::MouseEvent {
             kind: crossterm::event::MouseEventKind::ScrollDown,
@@ -518,13 +614,16 @@ fn theme_dialog_esc_reverts_the_preview_to_the_committed_theme() {
         })),
         &ctl,
     );
-    assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
+    assert_eq!(app.theme.bg, Color::Rgb(239, 241, 245), "Latte base");
+    assert_eq!(app.theme.mode, crate::theme::Mode::Light);
     assert!(app.picker.is_some(), "wheel preview keeps the dialog open");
 
-    // …Esc closes without confirming: the committed theme comes back.
+    // …Esc closes without confirming: the committed theme comes back, in the
+    // committed mode — a previewed flavor's light/dark must not leak out.
     app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))), &ctl);
     assert!(app.picker.is_none());
     assert_eq!(app.active_palette_id, "default");
+    assert_eq!(app.theme.mode, crate::theme::Mode::Dark);
     assert_eq!(
         app.theme.brand, DEEPSEEK_450,
         "Esc must revert the preview — arrows never confirm"
@@ -550,27 +649,40 @@ fn slash_theme_popup_previews_and_reverts_without_enter() {
     assert_eq!(app.slash_sel, 1, "default row is the current theme");
     assert_eq!(app.active_palette_id, "default");
 
-    // ↓ to ember → preview only; draft and popup stay, theme uncommitted.
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
-    assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
+    // ↓ onto the first flavor → preview only; draft and popup stay, theme
+    // uncommitted. Latte owns a light mode, so the preview brings it along.
+    down(&mut app, &ctl);
+    assert_eq!(
+        app.slash_theme_candidate().as_deref(),
+        Some("catppuccin-latte")
+    );
+    assert_eq!(app.theme.bg, Color::Rgb(239, 241, 245), "Latte base");
+    assert_eq!(app.theme.mode, crate::theme::Mode::Light);
     assert_eq!(app.active_palette_id, "default");
     assert!(
         app.slash_completion_open(),
         "preview must not consume the draft"
     );
 
-    // ↓ wraps to the dark/light toggle row — no theme highlighted, so the
-    // committed theme shows again.
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
-    assert_eq!(app.theme.brand, DEEPSEEK_450);
+    // Arrowing on to the Plugin pack previews it in the committed mode.
+    slash_walk_to(&mut app, &ctl, "ember");
+    assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
     assert_eq!(app.active_palette_id, "default");
 
-    // ↓↓ back onto ember, then Esc dismisses the popup and reverts too.
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
+    // ↓ wraps to the dark/light toggle row — no theme highlighted, so the
+    // committed theme and mode show again.
+    down(&mut app, &ctl);
+    assert_eq!(app.slash_theme_candidate(), None);
+    assert_eq!(app.theme.brand, DEEPSEEK_450);
+    assert_eq!(app.theme.mode, crate::theme::Mode::Dark);
+    assert_eq!(app.active_palette_id, "default");
+
+    // Back onto ember, then Esc dismisses the popup and reverts too.
+    slash_walk_to(&mut app, &ctl, "ember");
     assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
     app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))), &ctl);
     assert!(!app.slash_completion_open());
+    assert_eq!(app.theme.mode, crate::theme::Mode::Dark);
     assert_eq!(
         app.theme.brand, DEEPSEEK_450,
         "Esc must revert the popup preview"
@@ -589,7 +701,7 @@ fn slash_theme_popup_enter_commits_the_previewed_palette() {
     );
     app.input.set("/theme ".into());
     app.snap_slash_sel();
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &ctl);
+    slash_walk_to(&mut app, &ctl, "ember");
     assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
     assert_eq!(app.active_palette_id, "default");
 
@@ -631,7 +743,7 @@ fn dialog_stopped_pack_preview_is_transient_and_enter_holds_it_while_loading() {
 
     // The stopped pack's stored token map previews while the Plugin stays
     // stopped — arrows need no client round trip and confirm nothing.
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &client_ctl);
+    picker_walk_to(&mut app, &client_ctl, "ember");
     assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
     assert_eq!(app.active_palette_id, "default");
     assert!(
@@ -649,7 +761,7 @@ fn dialog_stopped_pack_preview_is_transient_and_enter_holds_it_while_loading() {
     // Enter confirms: the client registry is asked, and the previewed
     // colors stay on screen while the Plugin loads (no flash to default).
     app.run_slash("theme", "", &client_ctl);
-    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))), &client_ctl);
+    picker_walk_to(&mut app, &client_ctl, "ember");
     assert_eq!(app.theme.brand, Color::Rgb(247, 140, 60));
     app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))), &client_ctl);
     assert!(app.picker.is_none());
@@ -667,18 +779,7 @@ fn dialog_stopped_pack_preview_is_transient_and_enter_holds_it_while_loading() {
 
 #[test]
 fn theme_mode_persists_across_restarts_unless_cli_overrides() {
-    let cfg = RuntimeConfig {
-        bin: "demo".into(),
-        cordis: "demo".into(),
-        workspace: "/tmp".into(),
-        session_root: fresh_root(),
-        provider: "deepseek-official".into(),
-        model: "deepseek-v4-flash".into(),
-        max_tokens: None,
-        base_url: None,
-        api_key: None,
-        startup_session: None,
-    };
+    let cfg = test_cfg();
     let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
     let (ctl, _commands) = crate::controller::tests::test_controller();
 
@@ -715,4 +816,99 @@ fn theme_mode_persists_across_restarts_unless_cli_overrides() {
     // A restart with an explicit --theme still overrides persistence.
     let cli_light = App::new(Some(Theme::light()), cfg, "s3".into(), true, false, tx);
     assert_eq!(cli_light.theme.mode, crate::theme::Mode::Light);
+}
+
+/// The four Catppuccin flavors ship inside the binary — no Plugin mount, no
+/// compositor — so a fresh start already offers the whole family.
+#[test]
+fn startup_seeds_the_builtin_flavor_catalog() {
+    let (app, _ctl, _rx) = test_app();
+    assert_eq!(catalog(&app), builtin_catalog(&[]));
+}
+
+/// The chosen flavor survives a restart: `settings.json`'s `theme` key is
+/// read back and resolved against the builtin catalog, mode included.
+#[test]
+fn persisted_catppuccin_choice_is_restored_at_startup() {
+    let (app, _rx) = restarted_app(json!({
+        "theme": "catppuccin-macchiato",
+        "themeMode": "dark",
+    }));
+    assert_eq!(app.active_palette_id, "catppuccin-macchiato");
+    assert_eq!(app.theme.bg, Color::Rgb(36, 39, 58)); // base #24273a
+    assert_eq!(app.theme.brand, Color::Rgb(198, 160, 246)); // mauve #c6a0f6
+    assert_eq!(app.theme.mode, crate::theme::Mode::Dark);
+}
+
+/// A persisted id this binary does not carry — a Plugin pack from an older
+/// install — falls back to the builtin default instead of failing to start.
+#[test]
+fn unknown_persisted_theme_falls_back_to_the_default_pack() {
+    let (app, _rx) = restarted_app(json!({ "theme": "iceberg" }));
+    assert_eq!(app.active_palette_id, "default");
+    assert_eq!(app.theme.brand, DEEPSEEK_450);
+}
+
+/// Committing a flavor enters the mode it owns and persists both halves of
+/// the choice, so the next start lands on the same light Latte.
+#[test]
+fn slash_theme_commits_a_flavor_in_its_own_mode_and_persists_it() {
+    let (mut app, ctl, _rx) = test_app();
+    app.run_slash("theme", "catppuccin-latte", &ctl);
+
+    assert_eq!(app.active_palette_id, "catppuccin-latte");
+    assert_eq!(app.theme.mode, crate::theme::Mode::Light);
+    assert_eq!(app.theme.bg, Color::Rgb(239, 241, 245)); // base #eff1f5
+    let saved = saved_settings(&app);
+    assert_eq!(saved["theme"], "catppuccin-latte", "{saved}");
+    assert_eq!(saved["themeMode"], "light", "{saved}");
+}
+
+/// ctrl+t inside the family stays inside it: Macchiato toggles to its Latte
+/// slot rather than back to the DeepSeek default, and the pack stays put.
+#[test]
+fn ctrl_t_inside_a_flavor_toggles_to_its_latte_slot() {
+    let (mut app, ctl, _rx) = test_app();
+    app.run_slash("theme", "catppuccin-macchiato", &ctl);
+    assert_eq!(app.theme.bg, Color::Rgb(36, 39, 58)); // base #24273a
+
+    app.handle(
+        AppEvent::Term(Event::Key(KeyEvent::new(
+            KeyCode::Char('t'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ))),
+        &ctl,
+    );
+
+    assert_eq!(app.theme.mode, crate::theme::Mode::Light);
+    assert_eq!(app.theme.bg, Color::Rgb(239, 241, 245), "Latte base");
+    assert_eq!(
+        app.active_palette_id, "catppuccin-macchiato",
+        "toggling the mode keeps the committed pack"
+    );
+    assert_eq!(saved_settings(&app)["themeMode"], "light");
+}
+
+/// A preview carries the flavor's own mode with it, and Esc hands the
+/// committed pack its committed mode back — light committed, dark previewed.
+#[test]
+fn flavor_preview_borrows_its_mode_and_esc_returns_the_committed_one() {
+    let (mut app, ctl, _rx) = test_app();
+    app.run_slash("theme", "catppuccin-latte", &ctl);
+    assert_eq!(app.theme.mode, crate::theme::Mode::Light);
+
+    app.run_slash("theme", "", &ctl);
+    picker_walk_to(&mut app, &ctl, "catppuccin-macchiato");
+    assert_eq!(app.theme.bg, Color::Rgb(36, 39, 58), "Macchiato base");
+    assert_eq!(app.theme.mode, crate::theme::Mode::Dark);
+    assert_eq!(
+        app.active_palette_id, "catppuccin-latte",
+        "arrows only preview; the committed theme must stay Latte"
+    );
+
+    app.handle(AppEvent::Term(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))), &ctl);
+    assert!(app.picker.is_none());
+    assert_eq!(app.active_palette_id, "catppuccin-latte");
+    assert_eq!(app.theme.mode, crate::theme::Mode::Light);
+    assert_eq!(app.theme.bg, Color::Rgb(239, 241, 245), "Latte base");
 }

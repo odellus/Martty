@@ -132,7 +132,7 @@ fn lang_switch_repaints_immediately_and_persists_for_the_workspace() {
     let legacy = std::path::Path::new(&cfg.session_root).join("dsh-tui-settings.json");
     std::fs::write(
         &legacy,
-        r#"{"language":"en","uiPreset":"deepseek","theme":"ember"}"#,
+        r#"{"language":"en","uiPreset":"deepseek","defaultHarness":"crow-cli"}"#,
     )
     .expect("seed UI preset selection");
     let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
@@ -177,14 +177,14 @@ fn lang_switch_repaints_immediately_and_persists_for_the_workspace() {
     )
     .unwrap();
     assert_eq!(
-        saved["theme"], "ember",
+        saved["defaultHarness"], "crow-cli",
         "/lang preserves Client-owned settings"
     );
 }
 
 /// A settings.json that cannot be parsed must be quarantined for recovery,
-/// not silently replaced with `{}` (the same file carries the compositor's
-/// theme/uiPreset keys and the harness recipes).
+/// not silently replaced with `{}` (the same file carries the palette id, the
+/// compositor's uiPreset key and the harness recipes).
 #[test]
 fn corrupt_settings_are_quarantined_instead_of_clobbered() {
     let cfg = test_cfg();
@@ -218,7 +218,7 @@ fn corrupt_settings_are_quarantined_instead_of_clobbered() {
     assert_eq!(saved["language"], "zh", "the save still landed");
 }
 
-/// A normal save keeps every key it does not own (compositor theme/uiPreset,
+/// A normal save keeps every key it does not own (compositor uiPreset,
 /// harness recipes, future fields) and leaves no temp file behind.
 #[test]
 fn settings_save_preserves_unknown_keys_and_cleans_up_temp_files() {
@@ -246,7 +246,10 @@ fn settings_save_preserves_unknown_keys_and_cleans_up_temp_files() {
             .expect("settings parse");
     assert_eq!(saved["language"], "zh");
     assert_eq!(saved["uiPreset"], "deepseek", "compositor key preserved");
-    assert_eq!(saved["theme"], "ember", "compositor key preserved");
+    assert_eq!(
+        saved["theme"], "default",
+        "the palette catalog owns `theme`: an id this binary does not carry falls back"
+    );
     assert_eq!(saved["harnesses"][0]["id"], "x", "harness recipes preserved");
     assert_eq!(saved["customKey"], 7, "unknown keys preserved");
     let leftovers: Vec<String> = std::fs::read_dir(&dir)

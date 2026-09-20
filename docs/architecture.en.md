@@ -161,7 +161,11 @@ Rust painter          input, keymap, existing widgets reading Theme, kitty, clip
 | TUI shell | TTY, input, and compositor; consumes structured slot/overlay snapshots | Owning Plan/stats domain projections or interpreting harness `SessionEvent` |
 | Rust | Painting Theme through existing widgets | Interpreting colors in JS |
 
-The `tui-theme` service starts with builtin `default`. A dynamic Theme Plugin
+The binary carries builtin `default` plus the four Catppuccin flavors (Latte,
+Frappé, Macchiato, Mocha) — palette v1.8.0 hexes, roles mapped from Textual's
+own `catppuccin-*` themes. Latte owns a light mode and the other three a dark
+one, so a flavor is entered in the mode it ships in, and both halves of the
+choice persist to `theme` / `themeMode` in `settings.json`. A dynamic Theme Plugin
 declares its palette with `tuiTheme.register`; `/theme` is a special single-select
 Plugin switch that starts the target and stops the current Theme Plugin. Its
 palette, commands, overlays, slots, and RPC therefore share one Fiber lifetime.
@@ -173,7 +177,7 @@ Control uses existing ACP methods (including `authenticate`, matching Backchat's
 
 ## Theme
 
-Token **names** are closed; see [plugins.md](plugins.en.md). Built-in `default` keeps the cold bluish values. A palette pack may (and must) supply `#RRGGBB` for every token. When conversation nodes open later, nodes still name tokens; they do not carry RGB.
+Token **names** are closed; see [plugins.md](plugins.en.md). Built-in `default` keeps the cold bluish values; the built-in Catppuccin flavors keep the canonical palette hexes. A palette pack may (and must) supply `#RRGGBB` for every token. When conversation nodes open later, nodes still name tokens; they do not carry RGB.
 
 `/theme toggle` or `ctrl+t` toggles dark/light inside the current theme. `/theme <id>` switches the whole
 Theme Plugin. Kitty pet sprites are RGBA and do not recolor. In the startup
