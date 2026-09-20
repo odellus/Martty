@@ -120,10 +120,19 @@ pub fn render(text: &str, theme: &Theme, tone: ToneMode, width: usize) -> Vec<Li
                 let content = code_blocks.get_or_insert_with(|| code_block_texts(&text))
                     .pop_front().unwrap_or_default();
                 let inner = frame_width - 4;
-                for raw in content.lines() {
-                    let mut rows = wrap_pre(vec![Seg {
-                        text: raw.to_string(), style: DeepSeekStyleSheet(*theme).code(),
-                    }], inner);
+                // Token colors come from `highlight`, one entry per source
+                // line; a line it has nothing for keeps the plain code style.
+                let highlighted = crate::highlight::code_block(&content, lang, theme);
+                let plain = DeepSeekStyleSheet(*theme).code();
+                for (index, raw) in content.lines().enumerate() {
+                    let segs = match highlighted.get(index) {
+                        Some(runs) => runs
+                            .iter()
+                            .map(|(text, style)| Seg { text: text.clone(), style: *style })
+                            .collect(),
+                        None => vec![Seg { text: raw.to_string(), style: plain }],
+                    };
+                    let mut rows = wrap_pre(segs, inner);
                     if rows.is_empty() { rows.push(Line::default()); }
                     for row in rows {
                         out.push(with_prefix(&code_prefix, code_frame_row(row, inner, theme)));

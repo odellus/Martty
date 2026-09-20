@@ -50,7 +50,7 @@ fn link_and_image_render_with_urls() {
 }
 
 #[test]
-fn code_block_renders_as_framed_box_with_lang_label() {
+fn code_block_renders_as_a_framed_box_with_lang_label_and_token_colors() {
     let theme = Theme::dark();
     let lines = render("before\n\n```rust\nlet x = 1;\n```\n\nafter", &theme, ToneMode::Single, 40);
     let text = plain(&lines);
@@ -65,16 +65,32 @@ fn code_block_renders_as_framed_box_with_lang_label() {
         .expect("code line");
     assert_eq!(code_line.spans[0].content, "│");
     assert_eq!(code_line.spans.last().unwrap().content, "│");
-    let code_span = code_line
-        .spans
-        .iter()
-        .find(|s| s.content.contains("let x = 1;"))
-        .expect("code span");
-    // Light gray, upright (no italics), on the panel background.
-    assert_eq!(code_span.style.fg, Some(theme.fg));
-    assert_eq!(code_span.style.bg, Some(theme.panel));
-    assert!(!code_span.style.add_modifier.contains(Modifier::ITALIC));
     assert_eq!(line_width(code_line), 40, "row fills the width");
+    // The body is no longer one gray span: it is the tokenizer's runs, each in
+    // its palette role, all of them upright on the panel background.
+    let body = &code_line.spans[1..code_line.spans.len() - 1];
+    let dump = || {
+        body.iter()
+            .map(|s| (s.content.to_string(), s.style.fg))
+            .collect::<Vec<_>>()
+    };
+    let run = |needle: &str| {
+        body
+            .iter()
+            .find(|s| s.content.contains(needle))
+            .unwrap_or_else(|| panic!("no run containing {needle}: {:?}", dump()))
+    };
+    assert_eq!(run("let").style.fg, Some(theme.brand_soft), "{:?}", dump());
+    assert_eq!(run("1").style.fg, Some(theme.warn), "{:?}", dump());
+    assert_eq!(run("x").style.fg, Some(theme.fg), "{:?}", dump());
+    for span in body {
+        assert_eq!(span.style.bg, Some(theme.panel), "{:?}", dump());
+        assert!(
+            !span.style.add_modifier.contains(Modifier::ITALIC),
+            "{:?}",
+            dump()
+        );
+    }
 }
 
 #[test]

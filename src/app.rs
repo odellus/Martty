@@ -6383,13 +6383,15 @@ impl App {
                 self.toggle_theme_mode();
             }
             Action::ToggleExpandAll => {
-                self.transcript.expand_all = !self.transcript.expand_all;
-                self.show_tip(if self.transcript.expand_all {
-                    self.locale
-                        .tr("expanded all thoughts and tool results", "已展开全部思考与工具输出")
-                } else {
+                // Cells arrive open, so ctrl+o is the collapse-everything
+                // override first and the restore second.
+                self.transcript.collapse_all = !self.transcript.collapse_all;
+                self.show_tip(if self.transcript.collapse_all {
                     self.locale
                         .tr("collapsed all thoughts and tool results", "已折叠全部思考与工具输出")
+                } else {
+                    self.locale
+                        .tr("expanded all thoughts and tool results", "已展开全部思考与工具输出")
                 });
             }
             Action::SendNow => self.send_now(ctl),

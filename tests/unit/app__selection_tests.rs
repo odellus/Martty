@@ -169,11 +169,40 @@ fn tool_click_toggles_output_expansion() {
     app.chat_view.owners = vec![Some(0)];
 
     assert_eq!(app.tool_at(2, 0), Some(0), "tool line owns its cell");
-    assert!(!app.transcript.cells[0].expanded);
-    app.toggle_tool(0);
-    assert!(app.transcript.cells[0].expanded, "click expands");
+    assert!(
+        app.transcript.cells[0].expanded,
+        "tool cells arrive open, so the first click closes"
+    );
     app.toggle_tool(0);
     assert!(!app.transcript.cells[0].expanded, "click collapses");
+    app.toggle_tool(0);
+    assert!(app.transcript.cells[0].expanded, "click expands again");
+}
+
+#[test]
+fn ctrl_o_is_the_transcript_wide_collapse_override() {
+    let (ctl, _commands) = crate::controller::tests::test_controller();
+    let mut app = test_app();
+    app.transcript
+        .apply(crate::events::UiEvent::ToolCall {
+            session: "dsh-test".into(),
+            call_id: "c1".into(),
+            name: "bash".into(),
+            arguments: "{}".into(),
+        });
+
+    assert!(!app.transcript.collapse_all, "cells start open");
+    app.dispatch(crate::input::keymap::Action::ToggleExpandAll, &ctl);
+    assert!(
+        app.transcript.collapse_all,
+        "ctrl+o collapses every thought and tool result"
+    );
+    assert!(
+        app.transcript.cells[0].expanded,
+        "the override does not rewrite per-cell state"
+    );
+    app.dispatch(crate::input::keymap::Action::ToggleExpandAll, &ctl);
+    assert!(!app.transcript.collapse_all, "and ctrl+o opens them again");
 }
 
 #[test]
@@ -224,7 +253,10 @@ fn tool_click_in_a_child_view_targets_the_child_transcript() {
 
     app.toggle_tool(0);
 
-    assert!(app.subagents[0].transcript.cells[0].expanded);
+    assert!(
+        !app.subagents[0].transcript.cells[0].expanded,
+        "the click landed on the child cell, closing what arrived open"
+    );
     assert!(app.transcript.cells.is_empty());
 }
 

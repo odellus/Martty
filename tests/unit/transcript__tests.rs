@@ -503,7 +503,7 @@ fn empty_plan_snapshot_hides_the_existing_plan() {
 }
 
 #[test]
-fn tool_preview_shows_a_fixed_tail_and_expand_all_opens_it() {
+fn tool_output_is_open_by_default_and_collapse_all_takes_it_back() {
     let text = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8";
     let mut tr = t("s");
     tr.apply(UiEvent::ToolCall {
@@ -527,29 +527,55 @@ fn tool_preview_shows_a_fixed_tail_and_expand_all_opens_it() {
             .collect()
     };
 
-    // Default: a fixed 4-line tail preview (l5..l8) + expand hint.
-    let lines = tr.lines(&theme, crate::markdown::ToneMode::Single, 40, ' ');
-    let p = plain(&lines);
+    // Open by default: the whole body, no tail footer, no click required.
+    let p = plain(&tr.lines(&theme, crate::markdown::ToneMode::Single, 40, ' '));
+    assert!(p.contains("l1"), "the first line is visible on arrival: {p}");
+    assert!(p.contains("l8"), "and so is the last: {p}");
+    assert!(!p.contains("click to expand"), "an open body has no footer: {p}");
+    assert!(!p.contains("wheel"), "tool bodies have no inner scroll: {p}");
+
+    // ctrl+o is the transcript-wide override: it closes every cell at once.
+    tr.collapse_all = true;
+    let p = plain(&tr.lines(&theme, crate::markdown::ToneMode::Single, 40, ' '));
+    assert!(!p.contains("l4"), "collapsed keeps only the tail: {p}");
+    assert!(p.contains("l8"), "the tail stays: {p}");
     assert!(
         p.contains("last 4/8 lines"),
         "footer describes the fixed tail preview: {p}"
     );
-    assert!(
-        !p.contains("wheel"),
-        "tool preview has no inner scroll: {p}"
-    );
-    assert!(!p.contains("l4"), "l4 above the tail window is hidden: {p}");
-    assert!(p.contains("l8"), "tail line visible: {p}");
+}
 
-    // expand_all (ctrl+o) opens the whole body and drops the footer.
-    tr.expand_all = true;
-    let lines = tr.lines(&theme, crate::markdown::ToneMode::Single, 40, ' ');
-    let p = plain(&lines);
-    assert!(p.contains("l1"), "expand_all shows the top: {p}");
-    assert!(
-        !p.contains("click to expand"),
-        "no footer when expanded: {p}"
-    );
+#[test]
+fn reasoning_is_open_by_default_and_collapse_all_keeps_only_the_heading() {
+    let mut tr = t("s");
+    tr.apply(UiEvent::ReasoningDelta {
+        session: "s".into(),
+        text: "r1\nr2\nr3\nr4\nr5".into(),
+    });
+    // Assistant text closes the reasoning stream (`done`), which is the state
+    // a finished thought is read in.
+    tr.apply(UiEvent::TextDelta {
+        session: "s".into(),
+        text: "answer".into(),
+    });
+    let theme = Theme::dark();
+    let plain = |lines: &[Line]| -> String {
+        lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect()
+    };
+
+    let p = plain(&tr.lines(&theme, crate::markdown::ToneMode::Single, 40, ' '));
+    assert!(p.contains("r1"), "a finished thought is readable without a click: {p}");
+    assert!(p.contains("r5"), "all of it, not just a preview: {p}");
+    assert!(p.contains("5 lines"), "the heading still counts them: {p}");
+
+    tr.collapse_all = true;
+    let p = plain(&tr.lines(&theme, crate::markdown::ToneMode::Single, 40, ' '));
+    assert!(!p.contains("r1"), "collapsed drops the body: {p}");
+    assert!(!p.contains("r5"), "collapsed drops all of it: {p}");
+    assert!(p.contains("5 lines"), "the heading survives: {p}");
 }
 
 #[test]
@@ -687,4 +713,130 @@ fn clamp_str_never_splits_an_emoji_cluster() {
     assert!(out.ends_with('…'), "{out:?}");
     assert!(UnicodeWidthStr::width(out.as_str()) <= 6, "{out:?}");
     assert!(out.contains("👨‍👩‍👧"), "cluster split: {out:?}");
+}
+
+/// Rendered pane text of a transcript, spans concatenated.
+fn pane(tr: &mut Transcript, width: u16) -> String {
+    tr.lines(&Theme::dark(), crate::markdown::ToneMode::Single, width, ' ')
+        .iter()
+        .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+        .collect()
+}
+
+fn tool_call(tr: &mut Transcript, name: &str, arguments: &str) {
+    tr.apply(UiEvent::ToolCall {
+        session: "s".into(),
+        call_id: "c1".into(),
+        name: name.into(),
+        arguments: arguments.into(),
+    });
+}
+
+#[test]
+fn tool_command_reads_the_language_out_of_the_raw_input() {
+    // A kernel cell is python, whatever the tool is called.
+    assert_eq!(
+        tool_command(r#"{"code":"x = 1"}"#),
+        Some(("python", "x = 1".to_string()))
+    );
+    // A shell call is bash, as a string or an argv array.
+    assert_eq!(
+        tool_command(r#"{"command":"ls -la"}"#),
+        Some(("bash", "ls -la".to_string()))
+    );
+    assert_eq!(
+        tool_command(r#"{"command":["ls","-la"]}"#),
+        Some(("bash", "ls -la".to_string()))
+    );
+    // A file write shows its payload, language from the path.
+    assert_eq!(
+        tool_command(r#"{"path":"/a/b.rs","file_text":"fn main() {}"}"#),
+        Some(("rust", "fn main() {}".to_string()))
+    );
+    // Anything else falls back to the raw input itself.
+    let (lang, body) = tool_command(r#"{"mode":"read","target":"/x"}"#).expect("fallback");
+    assert_eq!(lang, "json");
+    assert!(body.contains("\"mode\""), "the whole input stays readable: {body}");
+    assert_eq!(tool_command("not json at all"), None);
+    assert_eq!(tool_command("{}"), None, "no command, no block");
+}
+
+#[test]
+fn an_open_tool_shows_its_command_as_a_labelled_block_from_the_first_frame() {
+    let mut tr = t("s");
+    tool_call(&mut tr, "execute", r#"{"code":"print(6 * 7)"}"#);
+
+    // Still running: the command is on screen, framed and labelled.
+    let p = pane(&mut tr, 60);
+    assert!(p.contains("print(6 * 7)"), "the command renders while pending: {p}");
+    assert!(p.contains("python"), "the frame names the language: {p}");
+    assert!(p.contains("┌"), "and it is a framed code block: {p}");
+
+    tr.apply(UiEvent::ToolResult {
+        session: "s".into(),
+        call_id: "c1".into(),
+        is_error: false,
+        text: "42".into(),
+        error: None,
+    });
+    let p = pane(&mut tr, 60);
+    assert!(
+        p.contains("print(6 * 7)"),
+        "the command stays put once the call finishes: {p}"
+    );
+    assert!(p.contains("42"), "and the output joins it below: {p}");
+}
+
+#[test]
+fn a_collapsed_tool_trades_the_command_block_for_its_one_line_title() {
+    let mut tr = t("s");
+    tool_call(&mut tr, "bash", r#"{"command":"cargo test"}"#);
+    tr.apply(UiEvent::ToolResult {
+        session: "s".into(),
+        call_id: "c1".into(),
+        is_error: false,
+        text: "42".into(),
+        error: None,
+    });
+
+    tr.collapse_all = true;
+    let p = pane(&mut tr, 60);
+    assert!(!p.contains("┌"), "no framed block while collapsed: {p}");
+    assert!(
+        p.contains("cargo test"),
+        "the header title still says what ran: {p}"
+    );
+}
+
+#[test]
+fn a_command_that_arrives_fenced_frames_once_and_keeps_its_output() {
+    // crow-cli rides `content` instead of `rawInput`, so what reaches the cell
+    // is the fence itself — and the completion repeats it ahead of the output.
+    let mut tr = t("s");
+    tool_call(&mut tr, "execute", "```python\nprint(6 * 7)\n```");
+    let p = pane(&mut tr, 60);
+    assert!(p.contains("\u{250c}\u{2500} python"), "the frame names the language: {p}");
+    assert!(p.contains("print(6 * 7)"), "the code is inside it: {p}");
+    assert!(!p.contains("```"), "the wire's own markers are not drawn: {p}");
+
+    tr.apply(UiEvent::ToolResult {
+        session: "s".into(),
+        call_id: "c1".into(),
+        is_error: false,
+        text: "```python\nprint(6 * 7)\n```\n42".into(),
+        error: None,
+    });
+    let p = pane(&mut tr, 60);
+    assert_eq!(
+        p.matches("print(6 * 7)").count(),
+        1,
+        "the echoed command is not drawn twice: {p}"
+    );
+    assert!(p.contains("42"), "the output lands below it: {p}");
+
+    tr.collapse_all = true;
+    let p = pane(&mut tr, 60);
+    assert!(!p.contains("\u{250c}"), "collapsed drops the frame: {p}");
+    assert!(p.contains("print(6 * 7)"), "the title still says what ran: {p}");
+    assert!(!p.contains("```"), "and never the markers: {p}");
 }

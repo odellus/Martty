@@ -1350,8 +1350,8 @@ fn hidden_tool_arguments_replace_thinking_with_the_working_placeholder() {
         "complete tool request still renders: {frame}"
     );
     assert!(
-        frame.contains("│ request"),
-        "complete request body remains visible: {frame}"
+        frame.contains("┌─ json") && frame.contains("\"description\": \"task\""),
+        "complete request body remains visible, framed as a code block: {frame}"
     );
 }
 

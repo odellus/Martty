@@ -638,8 +638,8 @@ fn subagent_tool_call_keeps_its_request_block_when_it_also_carries_lifecycle_met
     let frame = crate::ui::dump_frame(&mut app, 100, 24);
     assert!(frame.contains("Start subagent child-1"), "{frame}");
     assert!(
-        frame.lines().any(|line| line.contains("│ request")),
-        "the pending ACP tool call must expose its request before the child finishes:\n{frame}"
+        frame.lines().any(|line| line.contains("┌─ json")),
+        "the pending ACP tool call must expose its request before the child finishes, framed as a code block:\n{frame}"
     );
     assert!(frame.contains("childSessionId"), "{frame}");
 }

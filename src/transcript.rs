@@ -121,13 +121,39 @@ struct CellRender {
     /// the wrapped result line count (the `▸` chrome), Reasoning cells the
     /// wrapped body line count (`· N lines`). 0 when unused.
     meta: usize,
+    /// Tool cells: the raw input yielded a command block, so an open cell
+    /// leaves the one-line title out of the header rather than saying the
+    /// same thing twice.
+    has_command: bool,
+}
+
+/// What one `build_body` pass produced: the cacheable lines plus the two facts
+/// the per-frame header needs about them.
+struct BodyBuild {
+    lines: Vec<Line<'static>>,
+    meta: usize,
+    has_command: bool,
+}
+
+impl BodyBuild {
+    fn plain(lines: Vec<Line<'static>>, meta: usize) -> Self {
+        BodyBuild {
+            lines,
+            meta,
+            has_command: false,
+        }
+    }
 }
 
 impl Cell {
     fn new(kind: CellKind) -> Self {
         Cell {
             kind,
-            expanded: false,
+            // Thoughts and tool calls arrive open: the point of the transcript
+            // is to read what the agent did, and a wall of `▸` chevrons makes
+            // every turn a clicking exercise. ctrl+o collapses the lot, a
+            // click collapses one.
+            expanded: true,
             hidden: false,
             version: 0,
             render: None,
@@ -141,7 +167,7 @@ impl Cell {
     /// Return the cached body render, rebuilding it when the cell content
     /// version or any layout input (width/theme/tone/expanded/thumbs/locale)
     /// drifted. `expanded` is the *effective* value including the
-    /// transcript-wide `expand_all`; it decides Tool/Shell/Reasoning layout.
+    /// transcript-wide `collapse_all`; it decides Tool/Shell/Reasoning layout.
     fn ensure_render(
         &mut self,
         theme: &Theme,
@@ -164,7 +190,7 @@ impl Cell {
             None => true,
         };
         if stale {
-            let (body, meta) = build_body(
+            let built = build_body(
                 &self.kind,
                 theme,
                 tone,
@@ -181,8 +207,9 @@ impl Cell {
                 expanded,
                 thumbs,
                 locale,
-                body,
-                meta,
+                body: built.lines,
+                meta: built.meta,
+                has_command: built.has_command,
             });
         }
         self.render.as_ref().expect("body render built")
@@ -190,8 +217,8 @@ impl Cell {
 }
 
 /// Build the cacheable body lines for one cell: everything painted below the
-/// per-frame header. Returns the lines and the kind-specific header count.
-/// Only the expensive kinds route through here; User/Image/Injected/Plan/
+/// per-frame header. Only the expensive kinds route through here;
+/// User/Image/Injected/Plan/
 /// Notice cells render fresh (their work is bounded and small).
 fn build_body(
     kind: &CellKind,
@@ -201,12 +228,12 @@ fn build_body(
     expanded: bool,
     _thumbs: bool,
     locale: Locale,
-) -> (Vec<Line<'static>>, usize) {
+) -> BodyBuild {
     match kind {
         CellKind::Reasoning { text, .. } => {
             let body = text.trim();
             if body.is_empty() {
-                return (Vec::new(), 0);
+                return BodyBuild::plain(Vec::new(), 0);
             }
             let body_style = Style::default()
                 .fg(theme.fg_tertiary)
@@ -218,13 +245,13 @@ fn build_body(
                 })
                 .collect();
             let meta = lines.len();
-            (lines, meta)
+            BodyBuild::plain(lines, meta)
         }
         CellKind::Assistant { text, .. } => {
             if text.trim().is_empty() {
-                return (Vec::new(), 0);
+                return BodyBuild::plain(Vec::new(), 0);
             }
-            (crate::markdown::render(text, theme, tone, width), 0)
+            BodyBuild::plain(crate::markdown::render(text, theme, tone, width), 0)
         }
         CellKind::Tool {
             request, result, ok, error, ..
@@ -239,23 +266,51 @@ fn build_body(
             };
             let total = all.len();
             let mut lines: Vec<Line> = Vec::new();
-            let request = if ok.is_none() { request.trim() } else { "" };
-            if !request.is_empty() {
-                let label = locale.tr("request  ", "请求  ").to_string();
-                let pad = " ".repeat(label.width());
-                let request_width = width.saturating_sub(2 + label.width());
-                for (index, line) in
-                    wrap(request, request_width.max(1)).into_iter().take(TOOL_VIEWPORT).enumerate()
-                {
-                    lines.push(Line::from(vec![
-                        Span::styled("│ ".to_string(), Style::default().fg(theme.border)),
-                        Span::styled(
-                            if index == 0 { label.clone() } else { pad.clone() },
-                            Style::default().fg(theme.caption),
-                        ),
-                        Span::styled(line, Style::default().fg(theme.fg_tertiary)),
-                    ]));
+            let request = request.trim();
+            let command = tool_command(request);
+            if expanded {
+                // Open: the command as a framed, language-labelled block,
+                // through the same renderer assistant code fences use — and it
+                // stays put after the call finishes, with the output below it.
+                match &command {
+                    Some((lang, code)) => {
+                        let fence = format!("```{lang}\n{code}\n```");
+                        for line in crate::markdown::render(
+                            &fence,
+                            theme,
+                            tone,
+                            width.saturating_sub(2),
+                        ) {
+                            let mut row = line;
+                            row.spans.insert(
+                                0,
+                                Span::styled(
+                                    "│ ".to_string(),
+                                    Style::default().fg(theme.border),
+                                ),
+                            );
+                            lines.push(row);
+                        }
+                    }
+                    None if !request.is_empty() => lines.extend(tool_request_preview(
+                        request, width, None, theme, locale,
+                    )),
+                    None => {}
                 }
+            } else if ok.is_none() && !request.is_empty() {
+                // Closed and still running: the compact request preview, of
+                // the command when there is one rather than of the wire's own
+                // fencing around it.
+                let preview = command
+                    .as_ref()
+                    .map_or(request, |(_, code)| code.as_str());
+                lines.extend(tool_request_preview(
+                    preview,
+                    width,
+                    Some(TOOL_VIEWPORT),
+                    theme,
+                    locale,
+                ));
             }
             if let Some(err) = error {
                 for l in wrap(err, width.saturating_sub(2)) {
@@ -298,7 +353,11 @@ fn build_body(
                     ]));
                 }
             }
-            (lines, total)
+            BodyBuild {
+                lines,
+                meta: total,
+                has_command: command.is_some(),
+            }
         }
         CellKind::Shell { output, .. } => {
             let mut lines: Vec<Line> = Vec::new();
@@ -354,9 +413,9 @@ fn build_body(
                     }
                 }
             }
-            (lines, 0)
+            BodyBuild::plain(lines, 0)
         }
-        _ => (Vec::new(), 0),
+        _ => BodyBuild::plain(Vec::new(), 0),
     }
 }
 
@@ -459,7 +518,11 @@ pub struct Transcript {
     /// Provenance-reported model of the last assembled assistant message —
     /// the ground truth of what actually answered.
     pub last_model: Option<String>,
-    pub expand_all: bool,
+    /// Transcript-wide override from ctrl+o. Cells arrive open, so the
+    /// override's job is the other direction: while it is set every
+    /// Tool/Shell/Reasoning body falls back to its preview regardless of the
+    /// per-cell toggle, and clearing it hands control back to the cells.
+    pub collapse_all: bool,
     /// UI language for the notices this transcript renders (set by the App
     /// that owns it; cells already pushed keep the language they had).
     pub locale: Locale,
@@ -489,7 +552,7 @@ impl Transcript {
             ttft_pending: false,
             last_finish: None,
             last_model: None,
-            expand_all: false,
+            collapse_all: false,
             locale: Locale::default(),
             gen: 0,
         }
@@ -926,13 +989,14 @@ impl Transcript {
                     Some(idx) => {
                         if let Some(cell) = self.cells.get_mut(idx) {
                             if let CellKind::Tool {
+                                request,
                                 result,
                                 ok,
                                 error: e,
                                 ..
                             } = &mut cell.kind
                             {
-                                *result = text;
+                                *result = without_command_echo(request, &text);
                                 *ok = Some(!is_error);
                                 *e = error;
                             }
@@ -1140,7 +1204,7 @@ impl Transcript {
         thumbs: bool,
     ) -> TranscriptLayout {
         let width = width.max(8) as usize;
-        let expand_all = self.expand_all;
+        let collapse_all = self.collapse_all;
         let mut out: Vec<Line> = Vec::new();
         let mut owners: Vec<Option<usize>> = Vec::new();
         let mut images: Vec<ImageShot> = Vec::new();
@@ -1149,7 +1213,7 @@ impl Transcript {
             if cell.hidden {
                 continue;
             }
-            let expanded = cell.expanded || expand_all;
+            let expanded = cell.expanded && !collapse_all;
             // Wrap/markdown-heavy kinds paint their body lines from the
             // per-cell render cache (see `Cell::ensure_render`); headers stay
             // live so the spinner keeps turning without re-wrapping bodies.
@@ -1375,7 +1439,6 @@ impl Transcript {
                 CellKind::Tool {
                     name,
                     title,
-                    request,
                     ok,
                     agent,
                     ..
@@ -1402,8 +1465,10 @@ impl Transcript {
                             Style::default().fg(theme.caption),
                         ));
                     }
-                    let request = if ok.is_none() { request.trim() } else { "" };
-                    if !title.is_empty() && request.is_empty() {
+                    // An open cell frames the command below the header, so the
+                    // one-line title would only say the same thing twice.
+                    let titled = !title.is_empty() && !(expanded && render.has_command);
+                    if titled {
                         let prefix_w: usize = spans.iter().map(|s| s.content.width()).sum();
                         let chevron_w = if has_more { 2 } else { 0 };
                         let budget = width.saturating_sub(prefix_w + 2 + chevron_w);
@@ -1570,6 +1635,13 @@ fn agent_prefix(agent: &Option<String>) -> String {
 
 /// Human title for a tool call, parsed from its raw JSON argument string.
 pub fn tool_title(name: &str, arguments: &str) -> String {
+    // A command that arrived already fenced titles the cell with its code —
+    // the markers around it are the wire's, not something to read.
+    if let Some((_, code, _)) = split_leading_fence(arguments) {
+        if !code.trim().is_empty() {
+            return one_line(code.trim());
+        }
+    }
     let parsed: Option<serde_json::Value> = serde_json::from_str(arguments).ok();
     if let Some(v) = parsed {
         match name {
@@ -1595,6 +1667,210 @@ pub fn tool_title(name: &str, arguments: &str) -> String {
 
 fn one_line(s: &str) -> String {
     clamp_str(&s.replace('\n', " ⏎ "), 120)
+}
+
+/// The `request  `-labelled preview of a tool's raw input, capped to `take`
+/// lines when the cell is closed.
+fn tool_request_preview(
+    request: &str,
+    width: usize,
+    take: Option<usize>,
+    theme: &Theme,
+    locale: Locale,
+) -> Vec<Line<'static>> {
+    let label = locale.tr("request  ", "请求  ").to_string();
+    let pad = " ".repeat(label.width());
+    let request_width = width.saturating_sub(2 + label.width());
+    let wrapped = wrap(request, request_width.max(1));
+    let rows: Vec<String> = match take {
+        Some(n) => wrapped.into_iter().take(n).collect(),
+        None => wrapped,
+    };
+    rows.into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            Line::from(vec![
+                Span::styled("│ ".to_string(), Style::default().fg(theme.border)),
+                Span::styled(
+                    if index == 0 { label.clone() } else { pad.clone() },
+                    Style::default().fg(theme.caption),
+                ),
+                Span::styled(line, Style::default().fg(theme.fg_tertiary)),
+            ])
+        })
+        .collect()
+}
+
+/// The command inside a tool call's raw input, and the language to frame it as.
+///
+/// ACP hands over `rawInput` JSON and agents put the interesting part in a
+/// well-known field, so a kernel cell reads as python and a shell call as bash
+/// instead of both collapsing into one gray JSON blob. `None` when the input
+/// carries nothing worth framing.
+pub(crate) fn tool_command(request: &str) -> Option<(&'static str, String)> {
+    // An agent that fences the command itself needs no unpacking, only a
+    // language worth tokenizing.
+    if let Some((lang, code, _)) = split_leading_fence(request) {
+        if !code.trim().is_empty() {
+            return Some((lang_token(lang), code.to_owned()));
+        }
+    }
+    let value: serde_json::Value = serde_json::from_str(request).ok()?;
+    let object = value.as_object()?;
+    let field = |keys: &[&str]| -> Option<String> {
+        keys.iter().find_map(|key| {
+            object
+                .get(*key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        })
+    };
+    if let Some(code) = field(&["code"]) {
+        return Some(("python", code));
+    }
+    match object.get("command") {
+        Some(serde_json::Value::String(command)) if !command.trim().is_empty() => {
+            return Some(("bash", command.trim().to_owned()));
+        }
+        Some(serde_json::Value::Array(argv)) => {
+            let joined = argv
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !joined.trim().is_empty() {
+                return Some(("bash", joined));
+            }
+        }
+        _ => {}
+    }
+    // A file-writing tool: the payload is the command and the path names the
+    // language.
+    if let (Some(path), Some(payload)) = (
+        field(&["path", "file_path", "filename"]),
+        field(&["file_text", "new_str", "new_string", "content"]),
+    ) {
+        return Some((lang_for_path(&path), payload));
+    }
+    if object.is_empty() {
+        return None;
+    }
+    // Anything else: the raw input itself, spread out enough to read.
+    Some(("json", serde_json::to_string_pretty(&value).ok()?))
+}
+
+/// A request that arrived as a fenced block: `(language, code, rest)`.
+///
+/// crow-cli puts the kernel cell in the tool call's `content` already fenced
+/// for markdown, and repeats it ahead of the output on completion. Martty
+/// draws its own frame, so the markers are unpacked rather than rendered.
+fn split_leading_fence(text: &str) -> Option<(&str, &str, &str)> {
+    let (head, tail) = text.split_once('\n')?;
+    let lang = head.trim().strip_prefix("```")?.trim();
+    let close = tail.find("\n```")?;
+    let code = &tail[..close];
+    let rest = &tail[close + 1..];
+    let rest = rest.strip_prefix("```").unwrap_or(rest);
+    Some((lang, code, rest.split_once('\n').map_or("", |(_, r)| r)))
+}
+
+/// Drop a completion's echo of the command the cell already frames.
+///
+/// ACP clients merge an update's fields over the call's start, so an agent
+/// that rides `content` has to repeat it to keep it; without this the code
+/// would be drawn twice, once framed and once as output.
+fn without_command_echo(request: &str, text: &str) -> String {
+    let Some((_, code)) = tool_command(request) else {
+        return text.to_owned();
+    };
+    match split_leading_fence(text) {
+        Some((_, echoed, rest)) if echoed.trim() == code.trim() => {
+            rest.trim_start_matches('\n').to_owned()
+        }
+        _ => text.to_owned(),
+    }
+}
+
+/// Fence label for a file path's extension — what syntect then tokenizes.
+fn lang_for_path(path: &str) -> &'static str {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default();
+    lang_token(ext)
+}
+
+/// Every label [`lang_token`] can return. `highlight`'s tests hold this to
+/// syntect's default set: each one either resolves to a grammar or is one of
+/// the two named-but-uncolored labels below.
+#[cfg(test)]
+pub(crate) const LANG_TOKENS: &[&str] = &[
+    "python",
+    "rust",
+    "javascript",
+    "typescript",
+    "bash",
+    "json",
+    "markdown",
+    "toml",
+    "yaml",
+    "html",
+    "css",
+    "sql",
+    "c",
+    "cpp",
+    "go",
+    "ruby",
+    "lua",
+    "java",
+    "php",
+    "diff",
+    "xml",
+    "makefile",
+    "latex",
+    "haskell",
+    "scala",
+    "perl",
+    "r",
+    "text",
+];
+
+/// The language a fence label or file extension names, normalized to the token
+/// a frame is labelled with. Labels the default grammars do not cover (TOML,
+/// plain text) still name the language; they just render uncolored.
+fn lang_token(label: &str) -> &'static str {
+    match label.trim().to_ascii_lowercase().as_str() {
+        "py" | "pyi" | "python" | "python3" => "python",
+        "rs" | "rust" => "rust",
+        "js" | "mjs" | "cjs" | "jsx" | "javascript" | "node" => "javascript",
+        "ts" | "tsx" | "typescript" => "typescript",
+        "sh" | "bash" | "zsh" | "shell" | "console" => "bash",
+        "json" | "jsonc" => "json",
+        "md" | "markdown" => "markdown",
+        "toml" => "toml",
+        "yaml" | "yml" => "yaml",
+        "html" | "htm" => "html",
+        "css" => "css",
+        "sql" => "sql",
+        "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" | "c++" => "cpp",
+        "go" => "go",
+        "rb" | "ruby" => "ruby",
+        "lua" => "lua",
+        "java" => "java",
+        "php" => "php",
+        "diff" | "patch" => "diff",
+        "xml" | "xsl" | "xsd" => "xml",
+        "make" | "mk" | "makefile" => "makefile",
+        "tex" | "latex" => "latex",
+        "hs" | "haskell" => "haskell",
+        "scala" => "scala",
+        "pl" | "pm" | "perl" => "perl",
+        "r" => "r",
+        _ => "text",
+    }
 }
 
 /// Grapheme clusters of `s` with their terminal display width.

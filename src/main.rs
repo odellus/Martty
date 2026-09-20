@@ -23,6 +23,7 @@ mod mcp_supply;
 mod pet;
 mod harness;
 mod harness_badge;
+mod highlight;
 mod proto;
 mod runtime;
 mod sessions;
