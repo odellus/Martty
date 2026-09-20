@@ -2061,6 +2061,27 @@ fn status_right(app: &App) -> Vec<Span<'static>> {
             }
         }
     }
+    // Context-window meter from the agent's `usage_update`. Rendered natively
+    // because the composer-dock stats plugin that used to show token flow is
+    // Client-side, and without it the meter had nowhere to appear.
+    if let Some(ctx) = app.displayed_transcript().context {
+        let pct = (ctx.fraction() * 100.0).round() as u64;
+        let color = if pct >= 90 {
+            theme.err
+        } else if pct >= 70 {
+            theme.warn_soft()
+        } else {
+            theme.caption
+        };
+        spans.push(Span::styled(
+            format!(
+                " · ctx {}/{} {pct}%",
+                crate::app::fmt_tokens(ctx.used),
+                crate::app::fmt_tokens(ctx.size)
+            ),
+            Style::default().fg(color),
+        ));
+    }
     if app.demo {
         spans.push(Span::styled(
             " · demo".to_string(),

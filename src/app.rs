@@ -1563,6 +1563,7 @@ fn ui_session(event: &crate::events::UiEvent) -> Option<&str> {
         | UiEvent::ToolCall { session, .. }
         | UiEvent::ToolResult { session, .. }
         | UiEvent::Usage { session, .. }
+        | UiEvent::ContextUsage { session, .. }
         | UiEvent::UserInjected { session, .. }
         | UiEvent::UserMessage { session, .. }
         | UiEvent::SessionTitle { session, .. }
@@ -8694,6 +8695,19 @@ context, subagent lifecycles, token usage (incl. cache hits), end reason.";
             .as_deref()
             .map(|effort| format!("\n- effort · {effort}"))
             .unwrap_or_default();
+        // Context meter from the agent's `usage_update`, when it sends one.
+        let context_line = self
+            .transcript
+            .context
+            .map(|ctx| {
+                format!(
+                    "\n- context · {} of {} ({}%)",
+                    fmt_tokens(ctx.used),
+                    fmt_tokens(ctx.size),
+                    (ctx.fraction() * 100.0).round() as u64
+                )
+            })
+            .unwrap_or_default();
         let mut text = format!(
             "- session · {}{}\n\
              - provider · {} / {}{}\n\
@@ -8703,7 +8717,7 @@ context, subagent lifecycles, token usage (incl. cache hits), end reason.";
              - runtime · {}\n\
              - server · {}\n\
              - credentials · {}\n\
-             - tokens · ↑{} ↓{} (cached {} · reasoning {}) · Σ {}\n\
+             - tokens · ↑{} ↓{} (cached {} · reasoning {}) · Σ {}{}\n\
              - turns · {} · steps · {}\n\
              - LLM · {} · tool · {}",
             self.session_id,
@@ -8730,6 +8744,7 @@ context, subagent lifecycles, token usage (incl. cache hits), end reason.";
             fmt_tokens(u.cached),
             fmt_tokens(u.reasoning),
             fmt_tokens(total),
+            context_line,
             s.turns,
             s.steps,
             fmt_duration(llm_millis),
@@ -8888,7 +8903,7 @@ context, subagent lifecycles, token usage (incl. cache hits), end reason.";
 }
 
 /// Compact token count: `1234` → `1.2K`, `1_500_000` → `1.5M`.
-fn fmt_tokens(value: u64) -> String {
+pub(crate) fn fmt_tokens(value: u64) -> String {
     if value < 1000 {
         value.to_string()
     } else if value < 1_000_000 {

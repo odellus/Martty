@@ -55,6 +55,14 @@ pub enum UiEvent {
         cached: u64,
         reasoning: u64,
     },
+    /// Standard ACP `usage_update`: the context-window meter. `used`/`size`
+    /// are absolute readings, not per-turn deltas, so this *replaces* the
+    /// previous one rather than accumulating into `UsageTotals`.
+    ContextUsage {
+        session: String,
+        used: u64,
+        size: u64,
+    },
     UserInjected {
         session: String,
         source: String,
@@ -520,8 +528,18 @@ fn parse_session_update(params: &Value) -> Vec<UiEvent> {
                 .unwrap_or_default()
         }
         // Standard ACP `usage_update` reports context-window pressure as
-        // `used`/`size`; turn token totals come from `PromptResponse.usage`.
-        "usage_update" => Vec::new(),
+        // `used`/`size`. This used to be dropped on the assumption that turn
+        // totals always arrive on `PromptResponse.usage` — but an agent that
+        // never fills that field (crow-cli sends `usage_update` and nothing
+        // else) then reports no tokens at all, and the meter stays empty.
+        "usage_update" => match (u64_field(update, "used"), u64_field(update, "size")) {
+            (Some(used), Some(size)) => vec![UiEvent::ContextUsage {
+                session,
+                used,
+                size,
+            }],
+            _ => Vec::new(),
+        },
         _ => Vec::new(),
     }
 }

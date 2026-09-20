@@ -801,7 +801,7 @@ fn config_options_report_semantic_reasoning_effort() {
 }
 
 #[test]
-fn context_usage_update_is_not_misread_as_token_breakdown() {
+fn context_usage_update_becomes_a_meter_not_a_token_breakdown() {
     let events = parse_notification(
         "session/update",
         &json!({
@@ -814,10 +814,31 @@ fn context_usage_update_is_not_misread_as_token_breakdown() {
         }),
     );
 
-    assert!(
-        events.is_empty(),
-        "ACP usage_update is context pressure; token breakdown comes from PromptResponse.usage"
+    assert_eq!(
+        events,
+        vec![UiEvent::ContextUsage {
+            session: "s".into(),
+            used: 170,
+            size: 1000
+        }],
+        "usage_update is context pressure; it must stay out of the per-turn token breakdown"
     );
+}
+
+#[test]
+fn context_usage_update_without_a_ceiling_is_ignored() {
+    let events = parse_notification(
+        "session/update",
+        &json!({
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "usage_update",
+                "used": 170
+            }
+        }),
+    );
+
+    assert!(events.is_empty(), "used without size is not a meter reading");
 }
 
 #[test]

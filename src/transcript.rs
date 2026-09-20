@@ -402,6 +402,25 @@ pub struct UsageTotals {
     pub reasoning: u64,
 }
 
+/// The latest ACP `usage_update` reading: tokens currently in context against
+/// the agent's compaction ceiling. Absolute, so each update overwrites the last.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ContextUsage {
+    pub used: u64,
+    pub size: u64,
+}
+
+impl ContextUsage {
+    /// Fraction of the context window consumed, `0.0..=1.0`. A zero `size`
+    /// (agent sent no ceiling) reads as empty rather than dividing by zero.
+    pub fn fraction(&self) -> f64 {
+        if self.size == 0 {
+            return 0.0;
+        }
+        (self.used as f64 / self.size as f64).clamp(0.0, 1.0)
+    }
+}
+
 /// Native transcript timing/step facts used by session state and tests. The
 /// LLM usage/timing details surface through `/session` (and the Client-side
 /// `acpSessionStats` service for plugins), not a persistent status row.
@@ -429,6 +448,9 @@ pub struct Transcript {
     image_seq: u32,
     plan_cell: Option<usize>,
     pub usage: UsageTotals,
+    /// Latest context-window meter from `usage_update`; `None` until the
+    /// agent sends one.
+    pub context: Option<ContextUsage>,
     pub stats: SessionStats,
     turn_started: Option<Instant>,
     tool_started: HashMap<String, Instant>,
@@ -460,6 +482,7 @@ impl Transcript {
             image_seq: 0,
             plan_cell: None,
             usage: UsageTotals::default(),
+            context: None,
             stats: SessionStats::default(),
             turn_started: None,
             tool_started: HashMap::new(),
@@ -486,6 +509,7 @@ impl Transcript {
         self.agents.clear();
         self.plan_cell = None;
         self.usage = UsageTotals::default();
+        self.context = None;
         self.stats = SessionStats::default();
         self.turn_started = None;
         self.tool_started.clear();
@@ -940,6 +964,10 @@ impl Transcript {
                 self.usage.output += output;
                 self.usage.cached += cached;
                 self.usage.reasoning += reasoning;
+            }
+            // Absolute reading: overwrite, never accumulate.
+            UiEvent::ContextUsage { used, size, .. } => {
+                self.context = Some(ContextUsage { used, size });
             }
             UiEvent::UserInjected {
                 source, preview, ..

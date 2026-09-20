@@ -222,6 +222,54 @@ fn usage_accumulates() {
     assert_eq!(tr.usage.cached, 6);
 }
 
+#[test]
+fn context_usage_overwrites_and_stays_out_of_the_totals() {
+    let mut tr = t("s");
+    assert_eq!(tr.context, None);
+
+    tr.apply(UiEvent::ContextUsage {
+        session: "s".into(),
+        used: 100,
+        size: 1000,
+    });
+    tr.apply(UiEvent::ContextUsage {
+        session: "s".into(),
+        used: 250,
+        size: 1000,
+    });
+
+    // Absolute readings: the second replaces the first, it does not add to it.
+    assert_eq!(
+        tr.context,
+        Some(ContextUsage {
+            used: 250,
+            size: 1000
+        })
+    );
+    assert_eq!(tr.usage.input, 0);
+    assert_eq!(tr.usage.output, 0);
+}
+
+#[test]
+fn context_usage_fraction_and_reset() {
+    let mut tr = t("s");
+    tr.apply(UiEvent::ContextUsage {
+        session: "s".into(),
+        used: 250,
+        size: 1000,
+    });
+    let ctx = tr.context.expect("reading recorded");
+    assert!((ctx.fraction() - 0.25).abs() < f64::EPSILON);
+
+    // No ceiling reported -> no divide-by-zero, reads as empty.
+    assert_eq!(ContextUsage { used: 9, size: 0 }.fraction(), 0.0);
+    // Over-full context clamps rather than exceeding the window.
+    assert_eq!(ContextUsage { used: 2000, size: 1000 }.fraction(), 1.0);
+
+    tr.set_root_session("other".into());
+    assert_eq!(tr.context, None, "a new session starts with no meter");
+}
+
 fn line_width(line: &Line) -> usize {
     line.spans
         .iter()
