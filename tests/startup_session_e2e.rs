@@ -429,7 +429,16 @@ fn a_replayed_tool_call_shows_its_command_and_output_however_the_agent_sends_the
     // t1 carries `rawInput`, t2 carries only a fenced `content` block the way
     // crow-cli does. Both frame the command; the completion's echo of it is
     // not drawn a second time.
-    pane.expect(&["\u{250c}\u{2500} python \u{2500}", "print(6 * 7)", "print(6 * 9)", "54"]);
+    pane.expect(&[
+        "\u{250c}\u{2500} python \u{2500}",
+        "print(6 * 7)",
+        "print(6 * 9)",
+        "54",
+        // Thoughts open too: the body is on screen with no click, under a
+        // heading that says how many lines it has.
+        "the stub thinks in italics",
+        "thought",
+    ]);
     let screen = pane.text.clone();
     assert_eq!(
         screen.matches("print(6 * 9)").count(),

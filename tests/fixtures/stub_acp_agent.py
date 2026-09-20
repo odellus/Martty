@@ -106,6 +106,9 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32602, "message": "no such session: " + sid}})
             continue
+        # A replayed thought: the pane should open it without a click.
+        update(sid, "agent_thought_chunk", messageId="th1",
+               content={"type": "text", "text": "the stub thinks in italics"})
         # A replayed tool call: the pane should frame the command and keep it
         # on screen after the result lands.
         send({"jsonrpc": "2.0", "method": "session/update", "params": {
