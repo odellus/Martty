@@ -420,3 +420,21 @@ fn no_session_id_flag_starts_a_fresh_session_and_keeps_the_welcome_banner() {
     );
     pane.assert_alive();
 }
+
+#[test]
+fn a_replayed_tool_call_shows_its_command_and_output_however_the_agent_sends_them() {
+    let Some(mut pane) = launch("toolcall", "load", false, &STARTUP) else {
+        return;
+    };
+    // t1 carries `rawInput`, t2 carries only a fenced `content` block the way
+    // crow-cli does. Both frame the command; the completion's echo of it is
+    // not drawn a second time.
+    pane.expect(&["\u{250c}\u{2500} python \u{2500}", "print(6 * 7)", "print(6 * 9)", "54"]);
+    let screen = pane.text.clone();
+    assert_eq!(
+        screen.matches("print(6 * 9)").count(),
+        1,
+        "the echoed command is drawn once:\n{screen}"
+    );
+    pane.assert_alive();
+}

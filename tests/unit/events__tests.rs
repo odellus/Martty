@@ -200,6 +200,108 @@ fn standard_acp_nonterminal_tool_updates_refresh_the_existing_request() {
 }
 
 #[test]
+fn a_tool_call_that_rides_content_instead_of_raw_input_is_still_readable() {
+    // crow-cli's kernel tool sends no rawInput at all: the code rides the
+    // call's `content`, wrapped the way ACP wraps every tool-call content
+    // entry, and the completion repeats it ahead of the output.
+    let fence = "```python\nprint(6 * 7)\n```";
+    let started = parse_notification(
+        "session/update",
+        &json!({
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "turn/call_1",
+                "title": "execute",
+                "kind": "execute",
+                "status": "pending",
+                "content": [{"type": "content", "content": {"type": "text", "text": fence}}]
+            }
+        }),
+    );
+    assert_eq!(
+        started,
+        vec![UiEvent::ToolCall {
+            session: "s".into(),
+            call_id: "turn/call_1".into(),
+            name: "execute".into(),
+            arguments: fence.into(),
+        }]
+    );
+
+    let finished = parse_notification(
+        "session/update",
+        &json!({
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "turn/call_1",
+                "status": "completed",
+                "content": [
+                    {"type": "content", "content": {"type": "text", "text": fence}},
+                    {"type": "content", "content": {"type": "text", "text": "42"}}
+                ]
+            }
+        }),
+    );
+    assert_eq!(
+        finished,
+        vec![UiEvent::ToolResult {
+            session: "s".into(),
+            call_id: "turn/call_1".into(),
+            is_error: false,
+            text: format!("{fence}\n42"),
+            error: None,
+        }]
+    );
+}
+
+#[test]
+fn raw_input_wins_over_content_and_a_null_one_is_no_answer() {
+    let both = parse_notification(
+        "session/update",
+        &json!({
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "c",
+                "title": "fs",
+                "status": "pending",
+                "rawInput": {"mode": "read"},
+                "content": [{"type": "content", "content": {"type": "text", "text": "ignored"}}]
+            }
+        }),
+    );
+    assert_eq!(both[0], UiEvent::ToolCall {
+        session: "s".into(),
+        call_id: "c".into(),
+        name: "fs".into(),
+        arguments: r#"{"mode":"read"}"#.into(),
+    });
+
+    // An explicit null is an absent field, not the string "null".
+    let nulled = parse_notification(
+        "session/update",
+        &json!({
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "c",
+                "title": "fs",
+                "status": "pending",
+                "rawInput": null
+            }
+        }),
+    );
+    assert_eq!(nulled[0], UiEvent::ToolCall {
+        session: "s".into(),
+        call_id: "c".into(),
+        name: "fs".into(),
+        arguments: String::new(),
+    });
+}
+
+#[test]
 fn nested_acp_updates_are_attributed_to_the_child_session() {
     let events = parse_notification(
         "session/update",

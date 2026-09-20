@@ -562,7 +562,14 @@ fn acp_tool_call(session: String, update: &Value) -> UiEvent {
         arguments: update
             .get("rawInput")
             .or_else(|| update.get("raw_input"))
+            .filter(|raw| !raw.is_null())
             .map(Value::to_string)
+            // An agent that fills no `rawInput` still says what it is about to
+            // run: ACP lets the command ride the call's `content`, and crow-cli
+            // fences the kernel cell there. Reading only `rawInput` left such a
+            // cell with a name and nothing else — no command, no output.
+            .or_else(|| update.get("content").map(tool_content_text))
+            .filter(|text| !text.is_empty())
             .unwrap_or_default(),
     }
 }
@@ -602,9 +609,38 @@ fn acp_tool_output_text(update: &Value) -> String {
         return raw.to_string();
     }
     if let Some(content) = update.get("content") {
-        return concat_text_blocks(content);
+        return tool_content_text(content);
     }
     String::new()
+}
+
+/// Text of an ACP tool call's `content` array.
+///
+/// Each entry is a tagged union — `{"type":"content","content":{…}}` wraps an
+/// ordinary content block, alongside the `diff` and `terminal` variants — so
+/// the text sits one level deeper than the blocks `concat_text_blocks` reads
+/// out of a message chunk. Entries that skip the wrapper are read anyway.
+fn tool_content_text(content: &Value) -> String {
+    let Some(blocks) = content.as_array() else {
+        return String::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for block in blocks {
+        let inner = match block.get("type").and_then(Value::as_str) {
+            Some("content") => block.get("content"),
+            _ => Some(block),
+        };
+        let Some(inner) = inner else { continue };
+        if inner.get("type").and_then(Value::as_str) != Some("text") {
+            continue;
+        }
+        if let Some(text) = inner.get("text").and_then(Value::as_str) {
+            if !text.is_empty() {
+                out.push(text.to_owned());
+            }
+        }
+    }
+    out.join("\n")
 }
 
 fn plan_summary(update: &Value) -> String {

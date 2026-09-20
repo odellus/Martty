@@ -106,6 +106,54 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": rid,
                   "error": {"code": -32602, "message": "no such session: " + sid}})
             continue
+        # A replayed tool call: the pane should frame the command and keep it
+        # on screen after the result lands.
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": sid,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "t1",
+                "title": "execute",
+                "kind": "execute",
+                "status": "in_progress",
+                "rawInput": {"code": "print(6 * 7)"},
+            },
+        }})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": sid,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t1",
+                "status": "completed",
+                "rawOutput": {"output": "42"},
+            },
+        }})
+        # crow-cli's shape: no rawInput at all. The cell rides the call's
+        # `content`, already fenced, and the completion repeats it ahead of
+        # the output because clients merge update fields over the start.
+        fence = {"type": "content",
+                 "content": {"type": "text", "text": "```python\nprint(6 * 9)\n```"}}
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": sid,
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "t2",
+                "title": "execute",
+                "kind": "execute",
+                "status": "pending",
+                "content": [fence],
+            },
+        }})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": sid,
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "t2",
+                "status": "completed",
+                "content": [fence, {"type": "content",
+                                    "content": {"type": "text", "text": "54"}}],
+            },
+        }})
         update(sid, "agent_message_chunk", messageId="m1",
                content={"type": "text", "text": "replayed history line"})
         send({"jsonrpc": "2.0", "id": rid, "result": session_setup(sid)})
