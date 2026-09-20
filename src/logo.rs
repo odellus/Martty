@@ -1,11 +1,12 @@
 //! The crow-cli lockup as terminal art.
 //!
 //! `crow` carries the brand gradient (pale → brand in dark mode, brand →
-//! pale in light); `-cli` uses the terminal foreground (white in dark mode,
-//! black in light mode). Wide terminals get the full wordmark; narrower ones
-//! degrade to plain bold text.
+//! pale in light); `-cli` runs its own ramp in the theme's `ok` hue — mint in
+//! every builtin pack, the complement of the pink-and-blue `crow` — so the two
+//! words read as two hues rather than one flat ink. Wide terminals get the
+//! full wordmark; narrower ones degrade to plain bold text.
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::theme::{lerp, Mode, Theme, DEEPSEEK_200, DEEPSEEK_50};
@@ -39,6 +40,11 @@ fn split_row(row: &str, at: usize) -> (String, String) {
     (crow, cli)
 }
 
+/// A pale tint of `c`, for the far end of a ramp.
+fn pale(c: Color) -> Color {
+    lerp(c, Color::Rgb(255, 255, 255), 0.55)
+}
+
 fn split_logo_lines(
     rows: &[&str],
     split: usize,
@@ -51,24 +57,28 @@ fn split_logo_lines(
         Mode::Dark => (DEEPSEEK_50, theme.brand),
         Mode::Light => (theme.brand, DEEPSEEK_200),
     };
+    let (mint_top, mint_bottom) = match theme.mode {
+        Mode::Dark => (pale(theme.ok), theme.ok),
+        Mode::Light => (theme.ok, pale(theme.ok)),
+    };
     let last = rows.len().saturating_sub(1).max(1);
     rows.iter()
         .enumerate()
         .map(|(row_index, row)| {
+            let t = row_index as f32 / last as f32;
             let (crow, cli) = split_row(row, split);
-            let ocean = lerp(ocean_top, ocean_bottom, row_index as f32 / last as f32);
             Line::from(vec![
                 Span::raw(" ".repeat(pad)),
-                Span::styled(crow, Style::default().fg(ocean)),
-                Span::styled(cli, Style::default().fg(theme.fg)),
+                Span::styled(crow, Style::default().fg(lerp(ocean_top, ocean_bottom, t))),
+                Span::styled(cli, Style::default().fg(lerp(mint_top, mint_bottom, t))),
             ])
         })
         .collect()
 }
 
-/// The crow-cli logo rows, split into gradient `crow` and terminal-ink
-/// `-cli`, centered to `width`. Terminals too narrow for the wordmark get
-/// the same two tones as plain bold text.
+/// The crow-cli logo rows, split into a gradient `crow` and a gradient
+/// `-cli`, centered to `width`. Terminals too narrow for the wordmark get the
+/// same two hues as plain bold text.
 pub fn crow_cli_logo_lines(theme: &Theme, width: u16) -> Vec<Line<'static>> {
     if width < ART_WIDTH as u16 + 2 {
         if width >= WORDMARK.len() as u16 {
@@ -83,7 +93,7 @@ pub fn crow_cli_logo_lines(theme: &Theme, width: u16) -> Vec<Line<'static>> {
                 ),
                 Span::styled(
                     "-cli".to_string(),
-                    Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.ok).add_modifier(Modifier::BOLD),
                 ),
             ])];
         }

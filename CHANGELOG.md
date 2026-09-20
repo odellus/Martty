@@ -56,8 +56,9 @@ All notable changes to this project are documented here. The project follows
 
 - The startup lockup is the `crow-cli` wordmark, replacing the `MARTTY` block
   art: `crow` carries the brand gradient (pale → brand in dark mode, brand →
-  pale in light) and `-cli` the terminal foreground. A terminal narrower than
-  the 62-column art falls back to a bold one-line `crow-cli`.
+  pale in light) and `-cli` carries a mint ramp built from the theme's `ok`
+  token, so the two words read as two hues. A terminal narrower than the
+  62-column art falls back to a bold one-line `crow-cli`.
 
 ### Fixed
 

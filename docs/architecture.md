@@ -275,8 +275,8 @@ plan、stats 及待处理请求；初始化返回的 Agent 名称先于会话创
 Token **名**封闭，见 [plugins.md](plugins.md)。内置 `default` 的色值仍是冷蓝灰。配色包可以（也必须）为全部 token 提供 `#RRGGBB`。对话节点以后若开放，节点上仍然只写 token 名，不写 RGB。
 
 `/theme toggle` 或 `ctrl+t` 切当前主题的 dark/light。`/theme <id>` 切整个 Theme Plugin。kitty 宠物是 RGBA
-精灵，不随 token 重上色；启动锁屏是 `crow-cli` 字标：`crow` 读海洋渐变，`-cli` 读终端前景黑/白，
-窄于 62 列字符画的终端退化为单行粗体 `crow-cli`。
+精灵，不随 token 重上色；启动锁屏是 `crow-cli` 字标：`crow` 读海洋渐变，`-cli` 读由主题 `ok` token 生成的
+薄荷绿渐变，两个词因此是两种色相；窄于 62 列字符画的终端退化为单行粗体 `crow-cli`。
 UI Plugin 可以组合多个结构性 UI contribution，但不等同于 Theme。`default`（Martty）与
 `deepseek` 都同时装配 `welcome.hero` 和 `welcome.info`：前者是居中的
 `logo + hint` 品牌区，后者是左下的版本、模型、workspace、session、凭据、访问说明

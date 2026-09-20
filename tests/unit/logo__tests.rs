@@ -59,28 +59,48 @@ fn crow_cli_tiers() {
     );
 }
 
-/// `crow` carries the brand gradient while `-cli` follows the terminal
-/// foreground (white in dark mode, black in light mode).
+/// `crow` carries the brand gradient while `-cli` runs its own ramp in the
+/// theme's `ok` hue, so the two words never collapse into one ink.
 #[test]
-fn crow_cli_separates_gradient_crow_from_terminal_cli() {
+fn crow_cli_runs_a_gradient_per_word() {
     for theme in [Theme::dark(), Theme::light()] {
         for width in [16u16, 40, 80] {
             let lines = crow_cli_logo_lines(&theme, width);
             for line in &lines {
-                let visible = ink(line);
-                assert_eq!(visible.len(), 2, "`crow` + `-cli` at width {width}");
-                assert_eq!(visible[1].style.fg, Some(theme.fg), "terminal ink");
+                assert_eq!(ink(line).len(), 2, "`crow` + `-cli` at width {width}");
             }
             if lines.len() == 1 {
-                assert_eq!(ink(&lines[0])[0].style.fg, Some(theme.brand));
-            } else {
-                let (top, bottom) = match theme.mode {
-                    Mode::Dark => (DEEPSEEK_50, theme.brand),
-                    Mode::Light => (theme.brand, DEEPSEEK_200),
-                };
-                assert_eq!(ink(&lines[0])[0].style.fg, Some(top));
-                assert_eq!(ink(lines.last().unwrap())[0].style.fg, Some(bottom));
+                let visible = ink(&lines[0]);
+                assert_eq!(visible[0].style.fg, Some(theme.brand), "`crow`");
+                assert_eq!(visible[1].style.fg, Some(theme.ok), "`-cli`");
+                continue;
             }
+            let (ocean_top, ocean_bottom) = match theme.mode {
+                Mode::Dark => (DEEPSEEK_50, theme.brand),
+                Mode::Light => (theme.brand, DEEPSEEK_200),
+            };
+            let (mint_top, mint_bottom) = match theme.mode {
+                Mode::Dark => (pale(theme.ok), theme.ok),
+                Mode::Light => (theme.ok, pale(theme.ok)),
+            };
+            let first = ink(&lines[0]);
+            let last = ink(lines.last().unwrap());
+            assert_eq!(first[0].style.fg, Some(ocean_top), "`crow` opens pale");
+            assert_eq!(first[1].style.fg, Some(mint_top), "`-cli` opens pale");
+            assert_eq!(
+                last[0].style.fg,
+                Some(ocean_bottom),
+                "`crow` closes on brand"
+            );
+            assert_eq!(last[1].style.fg, Some(mint_bottom), "`-cli` closes on ok");
+            assert_ne!(
+                first[1].style.fg, last[1].style.fg,
+                "`-cli` ramp moves at width {width}"
+            );
+            assert_ne!(
+                first[0].style.fg, first[1].style.fg,
+                "the two words stay distinguishable"
+            );
         }
     }
 }
