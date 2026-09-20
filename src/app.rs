@@ -4477,17 +4477,17 @@ impl App {
                         }
                         // `--model` is an explicit "use THIS model for this
                         // run": apply it to whichever session the startup bind
-                        // landed on, unless the agent already reports it.
+                        // landed on. Once — the bind clears `session_model`, so
+                        // there is nothing to compare against yet, and a later
+                        // /new or /resume keeps whatever that agent reports.
                         if let Some(model) = self.startup_model.take() {
-                            if self.session_model.as_deref() != Some(model.as_str()) {
-                                self.selected_model = Some(model.clone());
-                                ctl.send(Cmd::SelectModel {
-                                    session_id: self.session_id.clone(),
-                                    provider: None,
-                                    model: Some(model),
-                                    effort: None,
-                                });
-                            }
+                            self.selected_model = Some(model.clone());
+                            ctl.send(Cmd::SelectModel {
+                                session_id: self.session_id.clone(),
+                                provider: None,
+                                model: Some(model),
+                                effort: None,
+                            });
                         }
                     }
                     CtlEvent::SessionList {

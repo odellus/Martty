@@ -885,13 +885,45 @@ async fn create_prompt_session(
     }
 }
 
+/// The order the two re-attach spellings are tried in: the advertised one
+/// first, so a load-only agent (crow-cli today) is never probed for a method
+/// it does not have. Caps pick the order; the wire decides the answer.
+fn reattach_order(resume_session: bool) -> [bool; 2] {
+    if resume_session {
+        [true, false]
+    } else {
+        [false, true]
+    }
+}
+
+/// What a successful re-attach says. `session/resume` replays nothing — the
+/// agent kept its state and the transcript starts empty — while `session/load`
+/// replays through `session/update` before answering.
+fn reattach_notice(id: &str, resumed: bool) -> String {
+    if resumed {
+        format!("⟲ resumed {id} — previous transcript was not replayed")
+    } else {
+        format!("⟲ loaded {id} — transcript from session/update")
+    }
+}
+
+/// Neither re-attach method exists, so `--session-id` cannot be honored at
+/// all. `MethodNotFound` is what tells connect() this apart from an agent
+/// that re-attaches and refused this particular id.
+fn reattach_unavailable_error(id: &str) -> AcpError {
+    AcpError::new(
+        -32601,
+        format!("agent implements neither session/resume nor session/load for '{id}'"),
+    )
+}
+
 /// Startup `--session-id`: re-attach to a durable session instead of creating
 /// one. Mirrors `Cmd::ResumeSession` — `session/resume` (the v2-shaped
 /// re-attach, no replay) when the agent advertises it, legacy `session/load`
-/// otherwise, and the other spelling too when the first one does not exist:
-/// caps only pick the order, the wire decides. `Err` carrying
-/// `ErrorCode::MethodNotFound` means the agent implements neither, so the flag
-/// cannot be honored at all; any other `Err` is the agent refusing this id.
+/// otherwise, and the other spelling too when the first one does not exist.
+/// `Err` carrying `ErrorCode::MethodNotFound` means the agent implements
+/// neither, so the flag cannot be honored at all; any other `Err` is the agent
+/// refusing this id.
 async fn resume_prompt_session(
     cx: &ConnectionTo<Agent>,
     cwd: &std::path::Path,
@@ -903,11 +935,9 @@ async fn resume_prompt_session(
     resume_session: bool,
 ) -> std::result::Result<Option<SessionId>, AcpError> {
     let sid = SessionId::new(id.to_string());
-    let mut restored: std::result::Result<(Value, bool), AcpError> = Err(AcpError::new(
-        -32601,
-        format!("agent implements neither session/resume nor session/load for '{id}'"),
-    ));
-    for resumed in if resume_session { [true, false] } else { [false, true] } {
+    let mut restored: std::result::Result<(Value, bool), AcpError> =
+        Err(reattach_unavailable_error(id));
+    for resumed in reattach_order(resume_session) {
         let sent = if resumed {
             cx.send_request(ResumeSessionRequest::new(sid.clone(), cwd.to_path_buf()))
                 .block_task_setup_deadline()
@@ -938,12 +968,7 @@ async fn resume_prompt_session(
     }
     match restored {
         Ok((setup, resumed)) => {
-            let notice = if resumed {
-                format!("⟲ resumed {id} — previous transcript was not replayed")
-            } else {
-                format!("⟲ loaded {id} — transcript from session/update")
-            };
-            emit_session_bound(bus, &sid, Some(notice));
+            emit_session_bound(bus, &sid, Some(reattach_notice(id, resumed)));
             apply_setup(&setup, Some(&sid.0), surface, bus);
             if !methods.is_empty() {
                 emit_auth(bus, configured_snapshot(methods.to_vec(), selected));

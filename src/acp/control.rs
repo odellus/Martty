@@ -721,11 +721,7 @@ async fn run_control(
                     .map(|loaded| (serde_json::to_value(loaded).unwrap_or(Value::Null), false))
             };
             let result = restored.map(|(setup, resumed)| {
-                let notice = if resumed {
-                    format!("⟲ resumed {id} — previous transcript was not replayed")
-                } else {
-                    format!("⟲ loaded {id} — transcript from session/update")
-                };
+                let notice = super::reattach_notice(id.as_str(), resumed);
                 (sid, setup, Some(notice))
             });
             let _ = done.send(ControlFinish::Setup { result, requester: None });

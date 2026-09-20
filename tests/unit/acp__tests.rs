@@ -4200,6 +4200,49 @@ fn structured_auth_failure_opens_owning_connection_and_parks_original_prompt() {
     assert!(rx.try_recv().is_err());
 }
 
+#[test]
+fn reattach_order_tries_the_advertised_spelling_first() {
+    assert_eq!(
+        reattach_order(true),
+        [true, false],
+        "an advertised resume is tried before the legacy load"
+    );
+    assert_eq!(
+        reattach_order(false),
+        [false, true],
+        "without a resume cap, load goes first and resume is only the fallback"
+    );
+}
+
+#[test]
+fn reattach_notice_names_the_method_that_answered() {
+    let resumed = reattach_notice("coolname", true);
+    assert!(resumed.contains("resumed coolname"), "{resumed}");
+    assert!(
+        resumed.contains("not replayed"),
+        "a resume has no transcript of its own: {resumed}"
+    );
+    let loaded = reattach_notice("coolname", false);
+    assert!(loaded.contains("loaded coolname"), "{loaded}");
+    assert!(
+        loaded.contains("session/update"),
+        "a load replays over the update stream: {loaded}"
+    );
+}
+
+#[test]
+fn reattach_unavailable_is_method_not_found_naming_both_spellings() {
+    let err = reattach_unavailable_error("coolname");
+    assert_eq!(
+        err.code,
+        ErrorCode::MethodNotFound,
+        "connect() reads this code to tell 'no re-attach at all' from 'this id was refused'"
+    );
+    assert!(err.message.contains("session/resume"), "{}", err.message);
+    assert!(err.message.contains("session/load"), "{}", err.message);
+    assert!(err.message.contains("coolname"), "{}", err.message);
+}
+
 /// Drives `connect()` against a mock agent and collects control events until
 /// the startup settles (`Ready` or `ConnectionFailed`) — a startup that hangs
 /// never settles, so it fails here instead of in a user's terminal.

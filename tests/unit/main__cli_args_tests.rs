@@ -118,3 +118,27 @@ fn dump_frame_does_not_swallow_the_next_flag() {
     assert_eq!(args.theme.as_deref(), Some("light"));
     assert!(args.demo);
 }
+
+#[test]
+fn session_id_flag_becomes_the_startup_reattach_target() {
+    let args = parse_args_from([
+        "-w".into(),
+        "/tmp".into(),
+        "--session-id".into(),
+        "coolname".into(),
+    ])
+    .unwrap();
+    let cfg = build_config(&args).unwrap();
+    assert_eq!(
+        cfg.startup_session.as_deref(),
+        Some("coolname"),
+        "--session-id must reach the runtime, not die in Args"
+    );
+}
+
+#[test]
+fn no_session_id_flag_means_no_startup_reattach() {
+    let args = parse_args_from(["-w".into(), "/tmp".into()]).unwrap();
+    let cfg = build_config(&args).unwrap();
+    assert_eq!(cfg.startup_session, None);
+}

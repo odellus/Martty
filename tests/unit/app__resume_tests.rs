@@ -551,3 +551,130 @@ fn acp_session_list_limit_skips_the_current_session_before_truncating() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The startup bind path: `--session-id` / `--model` are consumed by the first
+/// `SessionBound` after launch, so the App side needs no live agent to test.
+fn startup_app(
+    session: Option<&str>,
+    model: Option<&str>,
+) -> (App, std::sync::mpsc::Receiver<AppEvent>) {
+    let cfg = RuntimeConfig {
+        bin: "demo".into(),
+        cordis: "demo".into(),
+        workspace: "/tmp".into(),
+        session_root: "/tmp".into(),
+        provider: "deepseek-official".into(),
+        model: "deepseek-v4-flash".into(),
+        max_tokens: None,
+        base_url: None,
+        api_key: None,
+        startup_session: session.map(str::to_string),
+    };
+    let (tx, rx) = std::sync::mpsc::channel::<AppEvent>();
+    let mut app = App::new(Some(Theme::dark()), cfg, "dsh-startup".into(), false, false, tx);
+    app.startup_model = model.map(str::to_string);
+    app.demo = false;
+    app.session_bound = false;
+    app.startup_bound = false;
+    (app, rx)
+}
+
+fn transcript_text_of(app: &mut App) -> String {
+    app.transcript
+        .lines(&Theme::dark(), crate::markdown::ToneMode::Single, 100, ' ')
+        .iter()
+        .flat_map(|line| line.spans.iter().map(|span| span.content.to_string()))
+        .collect()
+}
+
+fn bind_startup(app: &mut App, ctl: &Controller, id: &str, notice: Option<&str>) {
+    app.handle(
+        AppEvent::Ctl(CtlEvent::SessionBound {
+            session_id: id.into(),
+            notice: notice.map(str::to_string),
+        }),
+        ctl,
+    );
+}
+
+#[test]
+fn startup_reattach_bind_dismisses_the_banner_so_the_notice_is_readable() {
+    let (mut app, _rx) = startup_app(Some("coolname"), None);
+    let (ctl, _commands) = crate::controller::tests::test_controller();
+    assert!(app.show_banner, "the welcome banner is up before the bind");
+
+    bind_startup(
+        &mut app,
+        &ctl,
+        "coolname",
+        Some("⟲ loaded coolname — transcript from session/update"),
+    );
+
+    assert_eq!(app.session_id, "coolname");
+    assert!(app.session_bound);
+    assert!(
+        !app.show_banner,
+        "a resumed session has no transcript of its own: the notice is the content"
+    );
+    let text = transcript_text_of(&mut app);
+    assert!(text.contains("loaded coolname"), "{text}");
+}
+
+#[test]
+fn a_bind_without_the_session_id_flag_keeps_the_welcome_banner() {
+    let (mut app, _rx) = startup_app(None, None);
+    let (ctl, _commands) = crate::controller::tests::test_controller();
+
+    bind_startup(&mut app, &ctl, "agent-minted", None);
+
+    assert_eq!(app.session_id, "agent-minted");
+    assert!(
+        app.show_banner,
+        "an ordinary new session still gets the welcome banner"
+    );
+}
+
+#[test]
+fn startup_model_is_applied_to_the_session_that_just_bound() {
+    let (mut app, _rx) = startup_app(Some("coolname"), Some("qwen3.8-max"));
+    let (ctl, commands) = crate::controller::tests::test_controller();
+
+    bind_startup(&mut app, &ctl, "coolname", Some("⟲ resumed coolname"));
+
+    let sent: Vec<_> = commands.try_iter().collect();
+    assert!(
+        sent.iter().any(|command| matches!(
+            command,
+            Cmd::SelectModel { session_id, model: Some(model), .. }
+                if session_id == "coolname" && model == "qwen3.8-max"
+        )),
+        "--model rides the same wire path as the ctrl+p picker: {sent:?}"
+    );
+    assert_eq!(app.selected_model.as_deref(), Some("qwen3.8-max"));
+    assert_eq!(app.startup_model, None, "applied once, not on every later bind");
+}
+
+#[test]
+fn startup_model_is_applied_once_not_on_every_later_bind() {
+    let (mut app, _rx) = startup_app(Some("coolname"), Some("qwen3.8-max"));
+    let (ctl, commands) = crate::controller::tests::test_controller();
+
+    bind_startup(&mut app, &ctl, "coolname", Some("⟲ resumed coolname"));
+    let first: Vec<_> = commands.try_iter().collect();
+    assert_eq!(
+        first
+            .iter()
+            .filter(|command| matches!(command, Cmd::SelectModel { .. }))
+            .count(),
+        1,
+        "{first:?}"
+    );
+
+    // A later bind (a /new tab, a reconnect) is not "this run's --model".
+    bind_startup(&mut app, &ctl, "second-session", None);
+    let later: Vec<_> = commands.try_iter().collect();
+    assert!(
+        !later.iter().any(|command| matches!(command, Cmd::SelectModel { .. })),
+        "--model belongs to the startup bind only: {later:?}"
+    );
+}
