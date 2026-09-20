@@ -52,6 +52,13 @@ All notable changes to this project are documented here. The project follows
   restored at startup, and an id this binary does not carry falls back to
   `default`.
 
+### Changed
+
+- The startup lockup is the `crow-cli` wordmark, replacing the `MARTTY` block
+  art: `crow` carries the brand gradient (pale → brand in dark mode, brand →
+  pale in light) and `-cli` the terminal foreground. A terminal narrower than
+  the 62-column art falls back to a bold one-line `crow-cli`.
+
 ### Fixed
 
 - Isolate nested Harness runners from the outer `npm exec --package` / `--call` selection so local-package launches can start Codex and other npx Harnesses; replace stale session-creation progress after a failed start.

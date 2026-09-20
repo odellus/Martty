@@ -353,7 +353,7 @@ fn render_node(node: &TuiNode, theme: &Theme, tone: ToneMode, width: usize) -> V
             crate::deepseek_logo::lines(theme, width as u16)
         }
         TuiNode::Logo { name, .. } if name == "martty" => {
-            crate::logo::martty_logo_lines(theme, width as u16)
+            crate::logo::crow_cli_logo_lines(theme, width as u16)
         }
         TuiNode::Logo { .. } | TuiNode::Welcomeinfo { .. } => Vec::new(),
         TuiNode::Text { text, tone, .. } => styled_wrapped(

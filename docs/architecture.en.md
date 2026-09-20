@@ -181,8 +181,9 @@ Token **names** are closed; see [plugins.md](plugins.en.md). Built-in `default` 
 
 `/theme toggle` or `ctrl+t` toggles dark/light inside the current theme. `/theme <id>` switches the whole
 Theme Plugin. Kitty pet sprites are RGBA and do not recolor. In the startup
-lockup, `MAR` reads the ocean gradient while `TTY` uses terminal foreground
-(white in dark mode, black in light mode). A UI Plugin can compose several UI
+lockup, `crow` reads the ocean gradient while `-cli` uses terminal foreground
+(white in dark mode, black in light mode); a terminal narrower than the art
+falls back to a bold one-line `crow-cli`. A UI Plugin can compose several UI
 contributions and is not a Theme alias. Both builtin `default` (Martty) and `deepseek`
 fill `welcome.hero` and `welcome.info`: the first is the centered `logo + hint`
 brand region; the second is the lower-left version/model/workspace/session/

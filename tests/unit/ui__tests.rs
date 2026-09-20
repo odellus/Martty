@@ -1551,13 +1551,14 @@ fn composer_grows_to_show_a_multiline_draft_until_its_cap() {
 fn banner_shows_until_first_prompt() {
     let mut app = test_app();
     assert!(app.show_banner, "banner defaults to on");
+    let mark = crate::logo::CROW_CLI[6].trim();
     assert!(
-        dump_frame(&mut app, 84, 40).contains("██████"),
+        dump_frame(&mut app, 84, 40).contains(mark),
         "wordmark visible on launch"
     );
     app.show_banner = false;
     assert!(
-        !dump_frame(&mut app, 84, 40).contains("██████"),
+        !dump_frame(&mut app, 84, 40).contains(mark),
         "whale dives once the banner is dismissed"
     );
 }

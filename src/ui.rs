@@ -4012,7 +4012,7 @@ fn draw_elicitation_form(f: &mut Frame, app: &mut App, screen: Rect) {
     }
 }
 
-/// Welcome banner: Martty logo, project URL, session facts. Shown while
+/// Welcome banner: crow-cli lockup, project URL, session facts. Shown while
 /// `app.show_banner` is set; it dives on the first real prompt.
 fn banner_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     let theme = &app.theme;
@@ -4041,7 +4041,7 @@ fn banner_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             )],
         ));
     } else {
-        out.extend(logo::martty_logo_lines(theme, width));
+        out.extend(logo::crow_cli_logo_lines(theme, width));
         out.push(Line::default());
 
         // Project URL, in the hero slot where the old slogan was.
