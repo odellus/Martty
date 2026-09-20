@@ -20,7 +20,7 @@ use agent_client_protocol::schema::v1::{
     ClientSessionCapabilities, ContentBlock, CreateElicitationRequest, CreateElicitationResponse,
     CreateTerminalRequest, CreateTerminalResponse, ElicitationAcceptAction, ElicitationAction,
     ElicitationCapabilities, ElicitationContentValue, ElicitationFormCapabilities,
-    ElicitationScope,
+    ElicitationScope, ErrorCode,
     FileSystemCapabilities, ImageContent, Implementation, InitializeRequest, KillTerminalRequest,
     KillTerminalResponse, ListSessionsRequest, LoadSessionRequest, NewSessionRequest,
     PermissionOptionKind, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
@@ -867,6 +867,84 @@ async fn create_prompt_session(
         Ok(created) => {
             let sid = created.session_id.clone();
             apply_created(&created, surface, bus, None);
+            if !methods.is_empty() {
+                emit_auth(bus, configured_snapshot(methods.to_vec(), selected));
+            }
+            Ok(Some(sid))
+        }
+        Err(err) if is_auth_required_error(&err) => {
+            emit_needs_auth_open(
+                bus,
+                methods.to_vec(),
+                selected,
+                Some(acp_error_message(&err)),
+            );
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+/// Startup `--session-id`: re-attach to a durable session instead of creating
+/// one. Mirrors `Cmd::ResumeSession` — `session/resume` (the v2-shaped
+/// re-attach, no replay) when the agent advertises it, legacy `session/load`
+/// otherwise, and the other spelling too when the first one does not exist:
+/// caps only pick the order, the wire decides. `Err` carrying
+/// `ErrorCode::MethodNotFound` means the agent implements neither, so the flag
+/// cannot be honored at all; any other `Err` is the agent refusing this id.
+async fn resume_prompt_session(
+    cx: &ConnectionTo<Agent>,
+    cwd: &std::path::Path,
+    surface: &Arc<Mutex<Surface>>,
+    bus: &Sender<AppEvent>,
+    methods: &[AuthMethodInfo],
+    selected: Option<&AuthMethodInfo>,
+    id: &str,
+    resume_session: bool,
+) -> std::result::Result<Option<SessionId>, AcpError> {
+    let sid = SessionId::new(id.to_string());
+    let mut restored: std::result::Result<(Value, bool), AcpError> = Err(AcpError::new(
+        -32601,
+        format!("agent implements neither session/resume nor session/load for '{id}'"),
+    ));
+    for resumed in if resume_session { [true, false] } else { [false, true] } {
+        let sent = if resumed {
+            cx.send_request(ResumeSessionRequest::new(sid.clone(), cwd.to_path_buf()))
+                .block_task_setup_deadline()
+                .await
+                .map(|setup| (serde_json::to_value(setup).unwrap_or(Value::Null), true))
+        } else {
+            cx.send_request(
+                    LoadSessionRequest::new(sid.clone(), cwd.to_path_buf())
+                        .mcp_servers(crate::mcp_supply::wire_servers()),
+                )
+                .block_task_setup_deadline()
+                .await
+                .map(|setup| (serde_json::to_value(setup).unwrap_or(Value::Null), false))
+        };
+        match sent {
+            Ok(setup) => {
+                restored = Ok(setup);
+                break;
+            }
+            // A missing method only means "try the other spelling". Anything
+            // else — an auth stall, an unknown id — is the answer.
+            Err(err) if err.code == ErrorCode::MethodNotFound => continue,
+            Err(err) => {
+                restored = Err(err);
+                break;
+            }
+        }
+    }
+    match restored {
+        Ok((setup, resumed)) => {
+            let notice = if resumed {
+                format!("⟲ resumed {id} — previous transcript was not replayed")
+            } else {
+                format!("⟲ loaded {id} — transcript from session/update")
+            };
+            emit_session_bound(bus, &sid, Some(notice));
+            apply_setup(&setup, Some(&sid.0), surface, bus);
             if !methods.is_empty() {
                 emit_auth(bus, configured_snapshot(methods.to_vec(), selected));
             }
@@ -2044,16 +2122,25 @@ where
                 // session, in arrival order behind the parked intent.
                 let mut pending = VecDeque::<Cmd>::new();
                 let mut setup_failed = false;
-                match create_prompt_session(
-                    &cx,
-                    &cwd,
-                    &surface,
-                    &bus,
-                    &methods,
-                    selected.as_ref(),
-                )
-                .await
-                {
+                // `--session-id` re-attaches instead of creating, and a
+                // re-attach that fails is fatal: binding a different session
+                // than the one asked for is how the flag used to be silently
+                // discarded. The banner carries `connection_error`, so the
+                // reason stays on screen and `/new` still recovers.
+                let started = match cfg.startup_session.as_deref() {
+                    Some(id) => {
+                        resume_prompt_session(
+                            &cx, &cwd, &surface, &bus, &methods, selected.as_ref(), id,
+                            resume_session,
+                        )
+                        .await
+                    }
+                    None => {
+                        create_prompt_session(&cx, &cwd, &surface, &bus, &methods, selected.as_ref())
+                            .await
+                    }
+                };
+                match started {
                     Ok(Some(sid)) => bind_session(&mut sessions, &mut current, &mut pending, sid),
                     Ok(None) => {
                         session_auth_pending = true;
@@ -2061,7 +2148,7 @@ where
                     Err(err) => {
                         setup_failed = true;
                         let _ = bus.send(AppEvent::Ctl(CtlEvent::ConnectionFailed {
-                            target: agent_name.clone(), error: format!("session/new: {err}")
+                            target: agent_name.clone(), error: format!("session setup: {err}")
                         }));
                     }
                 }
@@ -2859,5 +2946,6 @@ where
 }
 
 #[cfg(test)]
+
 #[path = "../tests/unit/acp__tests.rs"]
 mod tests;

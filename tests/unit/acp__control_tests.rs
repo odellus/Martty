@@ -147,6 +147,7 @@ async fn check_slow_control(config: bool) {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus, events) = std::sync::mpsc::channel();
     let (cmds, commands) = std::sync::mpsc::channel();
@@ -343,6 +344,7 @@ fn model_switch_cfg() -> RuntimeConfig {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     }
 }
 

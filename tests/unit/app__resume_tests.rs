@@ -12,6 +12,7 @@ fn test_app_with_root(root: &str, workspace: &str) -> (App, Controller) {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
     let ctl = Controller::start(cfg.clone(), true, None, tx.clone());

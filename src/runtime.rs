@@ -58,6 +58,9 @@ pub struct RuntimeConfig {
     pub max_tokens: Option<u64>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    /// `--session-id`: re-attach to this durable session at startup instead of
+    /// creating one (`session/resume`, legacy `session/load`).
+    pub startup_session: Option<String>,
 }
 
 impl RuntimeConfig {
@@ -230,6 +233,7 @@ mod tests {
             max_tokens: None,
             base_url: None,
             api_key: None,
+            startup_session: None,
         }
     }
 

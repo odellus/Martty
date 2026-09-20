@@ -12,6 +12,7 @@ fn test_app(workspace: &std::path::Path) -> (App, Receiver<AppEvent>) {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (tx, rx) = std::sync::mpsc::channel::<AppEvent>();
     let app = App::new(Some(Theme::dark()), cfg, "dsh-test".into(), true, false, tx);

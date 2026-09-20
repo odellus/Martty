@@ -264,6 +264,7 @@ fn build_config(args: &Args) -> Result<RuntimeConfig> {
         max_tokens: args.max_tokens,
         base_url: args.base_url.clone(),
         api_key: args.api_key.clone(),
+        startup_session: args.session_id.clone(),
     })
 }
 
@@ -446,6 +447,9 @@ fn main() -> Result<()> {
         args.attach_fds || args.attach_tcp.is_some() || !args.demo,
         bus_tx.clone(),
     );
+    // `--model` is an explicit "use THIS model for this run": applied to the
+    // startup session once it binds, the same wire path the ctrl+p picker uses.
+    app.startup_model = args.model.clone();
     // The composer pet: real pixels (kitty graphics) where the terminal can,
     // half-block art (drawn by ui) where it can't.
     app.pet_pixels = pet::kitty_supported();

@@ -1508,6 +1508,8 @@ pub struct App {
     pub selected_model: Option<String>,
     /// Current model reported by this ACP session's config snapshot.
     pub session_model: Option<String>,
+    /// `--model` for this run; consumed by the first session bind.
+    pub startup_model: Option<String>,
     pub demo: bool,
     /// A live ACP agent owns runtime, credentials, and its advertised catalog.
     pub attached: bool,
@@ -1933,6 +1935,7 @@ impl App {
             cfg,
             selected_model: None,
             session_model: None,
+            startup_model: None,
             demo,
             attached,
             session_bound: demo,
@@ -4461,8 +4464,30 @@ impl App {
                             just_bound = Some(self.session_id.clone());
                         }
                         if let Some(bound) = just_bound {
+                            // A `--session-id` start binds with a notice worth
+                            // reading — resumed, ignored, or failed — and a
+                            // resume has no transcript of its own; the welcome
+                            // banner would cover all of it. One-shot: only the
+                            // first bind after the flag dismisses it.
+                            if self.cfg.startup_session.take().is_some() {
+                                self.show_banner = false;
+                            }
                             self.dispatch_session_queue(&bound, ctl);
                             ctl.send(Cmd::FetchSkills { session_id: bound });
+                        }
+                        // `--model` is an explicit "use THIS model for this
+                        // run": apply it to whichever session the startup bind
+                        // landed on, unless the agent already reports it.
+                        if let Some(model) = self.startup_model.take() {
+                            if self.session_model.as_deref() != Some(model.as_str()) {
+                                self.selected_model = Some(model.clone());
+                                ctl.send(Cmd::SelectModel {
+                                    session_id: self.session_id.clone(),
+                                    provider: None,
+                                    model: Some(model),
+                                    effort: None,
+                                });
+                            }
                         }
                     }
                     CtlEvent::SessionList {

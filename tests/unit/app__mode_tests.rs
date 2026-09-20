@@ -29,6 +29,7 @@ fn test_cfg() -> RuntimeConfig {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     }
 }
 

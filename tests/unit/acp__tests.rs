@@ -340,6 +340,7 @@ async fn plugin_ui_events_are_compositor_notifications_not_prompts() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -554,6 +555,7 @@ async fn cordis_requests_stay_local_when_the_agent_did_not_advertise_cordis() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -632,6 +634,7 @@ async fn client_compositor_catalog_does_not_require_agent_cordis_capability() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -712,6 +715,7 @@ async fn client_compositor_command_does_not_require_agent_cordis_capability() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -820,6 +824,7 @@ async fn harness_new_action_uses_the_native_new_tab_flow_without_reinitializing(
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -937,7 +942,7 @@ async fn overlay_cancel_reaches_the_compositor_while_submit_is_pending() {
     let cfg = RuntimeConfig {
         bin: "demo".into(), cordis: "demo".into(), workspace: "/tmp".into(),
         session_root: "/tmp".into(), provider: "deepseek-official".into(),
-        model: "deepseek-v4-flash".into(), max_tokens: None, base_url: None, api_key: None,
+        model: "deepseek-v4-flash".into(), max_tokens: None, base_url: None, api_key: None, startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -1050,7 +1055,7 @@ async fn plugin_operation_defers_agent_requests_and_queued_prompts_until_complet
     let cfg = RuntimeConfig {
         bin: "demo".into(), cordis: "demo".into(), workspace: "/tmp".into(),
         session_root: "/tmp".into(), provider: "deepseek-official".into(),
-        model: "deepseek-v4-flash".into(), max_tokens: None, base_url: None, api_key: None,
+        model: "deepseek-v4-flash".into(), max_tokens: None, base_url: None, api_key: None, startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -1291,6 +1296,7 @@ async fn form_auth_stays_configured_when_the_startup_session_succeeds() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -1411,6 +1417,7 @@ async fn elicitation_create_waits_for_the_tui_form_reply() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -1515,6 +1522,7 @@ async fn new_session_binds_before_applying_initial_config() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -1597,6 +1605,7 @@ async fn set_config_option_response_updates_client_state_without_a_notification(
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -1707,6 +1716,7 @@ async fn effort_selection_uses_the_advertised_thought_level_config_id() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -1829,6 +1839,7 @@ async fn client_tree_config_set_uses_standard_acp_and_folds_response_only_state(
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -1943,6 +1954,7 @@ async fn resume_session_prefers_resume_and_binds_before_applying_initial_config(
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -2056,6 +2068,7 @@ async fn resume_session_falls_back_to_load_when_resume_is_rejected() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -2178,6 +2191,7 @@ async fn prompts_while_running_wait_in_fifo_without_session_cancel() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -2321,6 +2335,7 @@ async fn composition_catalog_is_ready_before_the_first_prompt() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -2440,6 +2455,7 @@ async fn auth_failure_parks_prompts_but_reports_steers_back_to_the_client() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -2603,7 +2619,7 @@ async fn authenticate_rejection_reports_failure_instead_of_another_sign_in_hint(
     let cfg = RuntimeConfig {
         bin: "demo".into(), cordis: "demo".into(), workspace: "/tmp".into(),
         session_root: "/tmp".into(), provider: "deepseek-official".into(),
-        model: "deepseek-v4-flash".into(), max_tokens: None, base_url: None, api_key: None,
+        model: "deepseek-v4-flash".into(), max_tokens: None, base_url: None, api_key: None, startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -2696,7 +2712,7 @@ async fn assert_authentication_before_session_setup(setup_error: Option<i32>) {
     let cfg = RuntimeConfig {
         bin: "demo".into(), cordis: "demo".into(), workspace: "/tmp".into(),
         session_root: "/tmp".into(), provider: "deepseek-official".into(),
-        model: "deepseek-v4-flash".into(), max_tokens: None, base_url: None, api_key: None,
+        model: "deepseek-v4-flash".into(), max_tokens: None, base_url: None, api_key: None, startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -2835,6 +2851,7 @@ async fn session_new_auth_failure_parks_the_first_intent_without_retry_storms() 
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -3003,6 +3020,7 @@ async fn late_steer_rejection_is_not_retried_by_the_transport_after_auth() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -3176,6 +3194,7 @@ async fn steer_sends_a_concurrent_prompt_without_interrupting_the_turn() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -3337,6 +3356,7 @@ async fn rejected_steer_reports_deferred_without_transport_retry() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -3496,6 +3516,7 @@ async fn interrupt_sends_session_cancel_while_prompt_is_in_flight() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -3723,6 +3744,7 @@ async fn sessions_run_concurrent_prompts_on_one_connection() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -3876,6 +3898,7 @@ async fn stale_text_prompt_finish_cannot_release_a_rebound_sessions_new_turn() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -4012,6 +4035,7 @@ async fn prompt_for_an_unbound_session_is_rejected_not_rerouted() {
         max_tokens: None,
         base_url: None,
         api_key: None,
+        startup_session: None,
     };
     let (bus_tx, bus_rx) = std::sync::mpsc::channel();
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
@@ -4174,4 +4198,287 @@ fn structured_auth_failure_opens_owning_connection_and_parks_original_prompt() {
         _ => panic!("expected owning-session authentication panel"),
     }
     assert!(rx.try_recv().is_err());
+}
+
+/// Drives `connect()` against a mock agent and collects control events until
+/// the startup settles (`Ready` or `ConnectionFailed`) — a startup that hangs
+/// never settles, so it fails here instead of in a user's terminal.
+async fn startup_ctl_events<T>(agent: T, startup_session: Option<&str>) -> Vec<CtlEvent>
+where
+    T: ConnectTo<Client> + 'static,
+{
+    let cfg = RuntimeConfig {
+        bin: "demo".into(),
+        cordis: "demo".into(),
+        workspace: "/tmp".into(),
+        session_root: "/tmp".into(),
+        provider: "deepseek-official".into(),
+        model: "deepseek-v4-flash".into(),
+        max_tokens: None,
+        base_url: None,
+        api_key: None,
+        startup_session: startup_session.map(str::to_string),
+    };
+    let (bus_tx, bus_rx) = std::sync::mpsc::channel();
+    let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+    let client = tokio::spawn(async move { connect(agent, cfg, bus_tx, cmd_rx).await });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut events = Vec::new();
+    let settled = loop {
+        if std::time::Instant::now() > deadline {
+            break false;
+        }
+        match bus_rx.recv_timeout(std::time::Duration::from_millis(20)) {
+            Ok(AppEvent::Ctl(event)) => {
+                let done =
+                    matches!(event, CtlEvent::Ready { .. } | CtlEvent::ConnectionFailed { .. });
+                events.push(event);
+                if done {
+                    break true;
+                }
+            }
+            Ok(_) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(err) => panic!("{err}"),
+        }
+    };
+    let _ = cmd_tx.send(Cmd::Shutdown);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), client).await;
+    assert!(settled, "startup never settled: {events:?}");
+    events
+}
+
+#[derive(Clone, Default)]
+struct ReattachCounters {
+    resumed: Arc<std::sync::atomic::AtomicUsize>,
+    loaded: Arc<std::sync::atomic::AtomicUsize>,
+    created: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ReattachCounters {
+    fn new() -> Self {
+        Self {
+            resumed: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            loaded: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            created: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    fn counts(&self) -> (usize, usize, usize) {
+        use std::sync::atomic::Ordering::SeqCst;
+        (
+            self.resumed.load(SeqCst),
+            self.loaded.load(SeqCst),
+            self.created.load(SeqCst),
+        )
+    }
+}
+
+/// Mock agent answering `initialize` with `$caps` and counting every re-attach
+/// call. `Some(error)` makes both re-attach methods answer with it instead of
+/// succeeding — a missing method (`-32601`) or a refused id.
+macro_rules! reattach_mock {
+    ($name:literal, $caps:expr, $counters:expr, $refuse:expr) => {{
+        let counters = $counters;
+        let refuse: Option<AcpError> = $refuse;
+        Agent
+            .builder()
+            .name($name)
+            .on_receive_request(
+                {
+                    let caps = $caps;
+                    async move |init: InitializeRequest, responder, _cx| {
+                        responder.respond(
+                            InitializeResponse::new(init.protocol_version)
+                                .agent_capabilities(caps.clone())
+                                .agent_info(Implementation::new($name, "0")),
+                        )
+                    }
+                },
+                on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let resumed = Arc::clone(&counters.resumed);
+                    let refuse = refuse.clone();
+                    async move |req: ResumeSessionRequest, responder, _cx| {
+                        resumed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        assert_eq!(&*req.session_id.0, "coolname", "--session-id must reach the wire");
+                        match &refuse {
+                            Some(err) => responder.respond_with_error(err.clone()),
+                            None => responder.respond(ResumeSessionResponse::new()),
+                        }
+                    }
+                },
+                on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let loaded = Arc::clone(&counters.loaded);
+                    let refuse = refuse.clone();
+                    async move |req: LoadSessionRequest, responder, _cx| {
+                        loaded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        assert_eq!(&*req.session_id.0, "coolname", "--session-id must reach the wire");
+                        match &refuse {
+                            Some(err) => responder.respond_with_error(err.clone()),
+                            None => responder.respond(LoadSessionResponse::new()),
+                        }
+                    }
+                },
+                on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let created = Arc::clone(&counters.created);
+                    async move |_req: NewSessionRequest, responder, _cx| {
+                        created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        responder.respond(NewSessionResponse::new(SessionId::new("fresh")))
+                    }
+                },
+                on_receive_request!(),
+            )
+    }};
+}
+
+fn bound_session_and_notice(events: &[CtlEvent]) -> (String, String) {
+    match events
+        .iter()
+        .find(|event| matches!(event, CtlEvent::SessionBound { .. }))
+    {
+        Some(CtlEvent::SessionBound {
+            session_id,
+            notice,
+        }) => (
+            session_id.clone(),
+            notice.clone().expect("a re-attach says which one it was"),
+        ),
+        other => panic!("expected SessionBound, got {other:?}"),
+    }
+}
+
+fn startup_error(events: &[CtlEvent]) -> String {
+    match events
+        .iter()
+        .find(|event| matches!(event, CtlEvent::ConnectionFailed { .. }))
+    {
+        Some(CtlEvent::ConnectionFailed { error, .. }) => error.clone(),
+        other => panic!("expected ConnectionFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_session_id_resumes_when_the_agent_advertises_resume() {
+    use agent_client_protocol::schema::v1::{
+        AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
+        ResumeSessionResponse, SessionCapabilities, SessionResumeCapabilities,
+    };
+
+    let counters = ReattachCounters::new();
+    let agent = reattach_mock!(
+        "resume-mock",
+        AgentCapabilities::new().session_capabilities(
+            SessionCapabilities::new().resume(SessionResumeCapabilities::new())
+        ),
+        counters.clone(),
+        None
+    );
+
+    let events = startup_ctl_events(agent, Some("coolname")).await;
+
+    assert_eq!(
+        counters.counts(),
+        (1, 0, 0),
+        "an advertised resume re-attaches on its own: no load probe, no session/new"
+    );
+    let (session_id, notice) = bound_session_and_notice(&events);
+    assert_eq!(session_id, "coolname");
+    assert!(notice.contains("resumed"), "{notice}");
+    assert!(events.iter().any(|event| matches!(event, CtlEvent::Ready { .. })));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_session_id_loads_when_only_load_session_is_advertised() {
+    use agent_client_protocol::schema::v1::{
+        AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
+        ResumeSessionResponse,
+    };
+
+    let counters = ReattachCounters::new();
+    let agent = reattach_mock!(
+        "load-mock",
+        AgentCapabilities::new().load_session(true),
+        counters.clone(),
+        None
+    );
+
+    let events = startup_ctl_events(agent, Some("coolname")).await;
+
+    assert_eq!(
+        counters.counts(),
+        (0, 1, 0),
+        "caps pick the order: a load-only agent is never probed for resume"
+    );
+    let (session_id, notice) = bound_session_and_notice(&events);
+    assert_eq!(session_id, "coolname");
+    assert!(notice.contains("loaded"), "{notice}");
+    assert!(events.iter().any(|event| matches!(event, CtlEvent::Ready { .. })));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_session_id_the_agent_refuses_fails_instead_of_binding_a_new_session() {
+    use agent_client_protocol::schema::v1::{
+        AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
+        ResumeSessionResponse,
+    };
+
+    let counters = ReattachCounters::new();
+    let agent = reattach_mock!(
+        "refusing-mock",
+        AgentCapabilities::new().load_session(true),
+        counters.clone(),
+        Some(AcpError::new(-32602, "no such session: coolname"))
+    );
+
+    let events = startup_ctl_events(agent, Some("coolname")).await;
+
+    assert_eq!(
+        counters.counts(),
+        (0, 1, 0),
+        "a refused id is an answer, not a reason to try another method or create a session"
+    );
+    let error = startup_error(&events);
+    assert!(error.contains("no such session: coolname"), "{error}");
+    assert!(
+        !events.iter().any(|event| matches!(event, CtlEvent::Ready { .. })),
+        "a failed re-attach must not report a ready session"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_session_id_with_no_reattach_method_says_so_instead_of_starting_fresh() {
+    use agent_client_protocol::schema::v1::{
+        AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
+        ResumeSessionResponse,
+    };
+
+    let counters = ReattachCounters::new();
+    let agent = reattach_mock!(
+        "no-reattach-mock",
+        AgentCapabilities::new(),
+        counters.clone(),
+        Some(AcpError::method_not_found())
+    );
+
+    let events = startup_ctl_events(agent, Some("coolname")).await;
+
+    assert_eq!(
+        counters.counts(),
+        (1, 1, 0),
+        "both spellings are probed when neither is advertised, and session/new is never a substitute"
+    );
+    let error = startup_error(&events);
+    assert!(
+        error.contains("neither session/resume nor session/load"),
+        "{error}"
+    );
 }
