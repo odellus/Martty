@@ -1,4 +1,4 @@
-//! Martty — a terminal-native ACP client UI.
+//! crow-term — a terminal-native ACP client UI.
 
 mod acp;
 mod acp_auth;
@@ -615,7 +615,7 @@ fn main() -> Result<()> {
                 input_gate.park();
                 restore_terminal();
                 eprintln!(
-                    "\n{} — finish setup in this terminal, then Martty resumes.\n",
+                    "\n{} — finish setup in this terminal, then crow-term resumes.\n",
                     launch.label
                 );
                 let result = crate::acp_auth::run_terminal_auth(&launch, app.locale);
