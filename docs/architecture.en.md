@@ -4,7 +4,7 @@ The ACP client is a Cordis plugin: it provides `ctx.acpClient`, speaks ACP, and 
 
 The primary `dsh --profile martty` path starts two processes. The Host process mounts the complete ACP plugin on its Base Cordis tree, then the Host runner starts a separate TUI Client process. They speak ACP only through the TUI Client's standard stdin/stdout; no Cordis services, plugin ids, `inject`, or fibers cross the process boundary. The Client process receives the user TTY on fd 3/4 and maps it to the Rust painter's stdin/stdout. Host↔Client ACP never uses fd 3/4.
 
-The standalone `martty` entry remains a general ACP client: its Client tree may spawn `dsh-acp`, `dsh --profile acp`, or another ACP agent, or attach a caller-owned stream.
+The standalone `crow-term` entry remains a general ACP client: its Client tree may spawn `dsh-acp`, `dsh --profile acp`, or another ACP agent, or attach a caller-owned stream.
 
 ## ACP client: root plugin or attached plugin
 
@@ -169,7 +169,7 @@ choice persist to `theme` / `themeMode` in `settings.json`. A dynamic Theme Plug
 declares its palette with `tuiTheme.register`; `/theme` is a special single-select
 Plugin switch that starts the target and stops the current Theme Plugin. Its
 palette, commands, overlays, slots, and RPC therefore share one Fiber lifetime.
-`martty --demo` stays on `default`; `--demo-skin` remains the static gallery path.
+`crow-term --demo` stays on `default`; `--demo-skin` remains the static gallery path.
 
 ## Control plane vs paint
 

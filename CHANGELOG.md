@@ -59,6 +59,19 @@ All notable changes to this project are documented here. The project follows
   pale in light) and `-cli` carries a mint ramp built from the theme's `ok`
   token, so the two words read as two hues. A terminal narrower than the
   62-column art falls back to a bold one-line `crow-cli`.
+- The client home is `~/.agents/crow`: settings live at
+  `$CROW_HOME/settings.json` and sessions at `$CROW_HOME/sessions`.
+  `CROW_HOME` replaces `MARTTY_HOME`, which is still honored so pre-rebrand
+  data keeps working, and `~/.martty` / `~/.dsh-tui` settings and session
+  roots are copied forward on first startup without deleting the source.
+- The cargo package and binary are now `crow-term` (was `martty` /
+  `deepseek-harness-tui`). `--version`, `--help`, the welcome version row and
+  the ACP `clientInfo` the agent sees all follow the package name.
+- The landing page advertises `https://crow-ai.dev` in place of
+  `https://martty.sh`; the hero layout itself is unchanged.
+- The composer cap row no longer rotates ambient tips. It carries the plugin
+  input dock or transient action feedback ("copied", "saved", errors) plus
+  the right-aligned workspace title; `/keys` remains the shortcut reference.
 
 ### Fixed
 

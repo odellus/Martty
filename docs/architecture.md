@@ -16,7 +16,7 @@ ACP client 是一个 Cordis 插件：提供 `ctx.acpClient`，讲 ACP，**不包
 
 主路径 `dsh --profile martty` 启动两个进程：Host 进程的 Base Cordis 树直接挂完整 ACP plugin；Host runner 再启动独立的 TUI Client 进程。两者只通过 TUI Client 的标准 stdin/stdout 讲 ACP，不共享 Cordis service、plugin id、`inject` 或 fiber。Client 进程的 fd 3/4 只继承用户 TTY，再映射为 Rust painter 的 stdin/stdout；Host↔Client ACP 不走 fd 3/4。
 
-独立入口 `martty` 保持通用 ACP client 语义：它的 Client 树可以 spawn `dsh-acp`、`dsh --profile acp` 或其它 ACP agent，也可以接调用方提供的 stream。
+独立入口 `crow-term` 保持通用 ACP client 语义：它的 Client 树可以 spawn `dsh-acp`、`dsh --profile acp` 或其它 ACP agent，也可以接调用方提供的 stream。
 
 ## ACP client：根插件或附加插件
 
@@ -238,7 +238,7 @@ Rust 画布     输入、keymap、Client FIFO、现有 widget 读 Theme/slot、k
 Latte 自带 light 模式，其余三款自带 dark 模式，选中即以其模式呈现，选择与明暗
 一并写入 `settings.json` 的 `theme` / `themeMode`。动态 Theme Plugin 用 `tuiTheme.register` 声明 palette；
 `/theme` 是特殊的单选 Plugin 开关，启动目标 Plugin 并停止当前 Theme Plugin，因而
-palette、command、overlay、slot 与 RPC 随同一个 Fiber 一起上下线。`martty --demo`
+palette、command、overlay、slot 与 RPC 随同一个 Fiber 一起上下线。`crow-term --demo`
 保持 `default`；`--demo-skin` 仍是静态 gallery 演示路径。常驻 gallery 包
 `ayu`（dark=Ayu、light=Ayu
 Light）、`catppuccin`（dark=Catppuccin Mocha、light=Catppuccin
@@ -283,7 +283,7 @@ UI Plugin 可以组合多个结构性 UI contribution，但不等同于 Theme。
 与帮助区。两套 preset 当前复用同一个原生动态 info renderer，但该区域可以独立被
 插件替换。旧 DeepSeek Harness 鲸鱼仍复用原版响应式 primitive。Rust 负责内部几何、
 水平居中与整个欢迎块的垂直居中；`/ui deepseek` / `/ui default` 切换并持久化到
-`$MARTTY_HOME/settings.json`。
+`$CROW_HOME/settings.json`。
 
 Creator 的 `cordis_define/run` Package 属于 Session 进程内预览。显式保存后，Client
 源码以 `$MARTTY_HOME/plugins/<artifact-id>/plugin.json` 为磁盘真源；Client 启动时
@@ -294,9 +294,10 @@ Client import。两类来源进入同一个 lifecycle manager；同 id 时安装
 UI Plugin 只组合结构性 UI contribution，不拥有 Theme；保存的 `uiPreset`、`theme`
 和 dark/light 相互独立。
 
-`MARTTY_HOME` 依次取显式环境变量、`$DSH_HOME/.martty`、`~/.martty`。默认 Session
-根是 `$MARTTY_HOME/sessions`。旧 settings、Creator artifacts 与 Session 根只作为
-非破坏迁移/发现来源保留。
+Rust 客户端的 `CROW_HOME` 依次取显式环境变量、旧 `MARTTY_HOME`、
+`$DSH_HOME/.agents/crow`、`~/.agents/crow`。默认 Session 根是
+`$CROW_HOME/sessions`，设置文件是 `$CROW_HOME/settings.json`。`~/.martty` 与
+`~/.dsh-tui` 下的旧 settings 和 Session 根只作为非破坏迁移/发现来源保留。
 
 ## 明确不做
 
