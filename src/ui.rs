@@ -4048,7 +4048,7 @@ fn banner_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         out.push(centered(
             width,
             vec![Span::styled(
-                "https://martty.sh".to_string(),
+                "https://crow-ai.dev".to_string(),
                 Style::default()
                     .fg(theme.fg_tertiary)
                     .add_modifier(Modifier::BOLD),
@@ -4088,7 +4088,7 @@ fn welcome_info_lines(app: &App) -> Vec<Line<'static>> {
     };
     out.push(kv(
         app.locale.tr("version", "版本"),
-        format!("martty {}", env!("CARGO_PKG_VERSION")),
+        format!("crow-term {}", env!("CARGO_PKG_VERSION")),
     ));
     out.push(kv(
         app.locale.tr("model", "模型"),

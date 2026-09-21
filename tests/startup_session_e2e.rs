@@ -410,7 +410,7 @@ fn no_session_id_flag_starts_a_fresh_session_and_keeps_the_welcome_banner() {
     let Some(mut pane) = launch("fresh", "both", false, &[]) else {
         return;
     };
-    pane.expect(&["https://martty.sh", "stub-default"]);
+    pane.expect(&["https://crow-ai.dev", "stub-default"]);
     let methods = pane.methods();
     assert_reattached(&methods, "session/new", &["session/load", "session/resume"]);
     assert!(

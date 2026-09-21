@@ -177,7 +177,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
                 args_out.dump_frame = Some(dims);
             }
             "-V" | "--version" => {
-                println!("martty {}", env!("CARGO_PKG_VERSION"));
+                println!("crow-term {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "-h" | "--help" => {

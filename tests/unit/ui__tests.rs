@@ -1599,7 +1599,7 @@ fn welcome_and_conversation_are_two_states_without_a_mixed_third_state() {
     let frame = dump_frame(&mut app, 140, 60);
 
     assert!(
-        frame.contains("https://martty.sh"),
+        frame.contains("https://crow-ai.dev"),
         "Welcome is visible:\n{frame}"
     );
     assert!(
@@ -1638,7 +1638,7 @@ fn harness_new_tab_displays_the_landing_page_and_preserves_old_transcript() {
     assert!(app.transcript.cells.is_empty());
     assert_eq!(app.session_tabs().len(), 2);
     let frame = dump_frame(&mut app, 140, 60);
-    assert!(frame.contains("https://martty.sh"), "landing page is visible:\n{frame}");
+    assert!(frame.contains("https://crow-ai.dev"), "landing page is visible:\n{frame}");
     assert!(!frame.contains("old Harness turn"), "{frame}");
     // Selecting the first tab uses the same public command path as the TUI.
     app.input.set("/session prev".into());
@@ -1650,7 +1650,7 @@ fn harness_new_tab_displays_the_landing_page_and_preserves_old_transcript() {
 }
 
 #[test]
-fn welcome_hero_slot_replaces_only_the_martty_lockup() {
+fn welcome_hero_slot_replaces_only_the_crow_cli_lockup() {
     let mut app = test_app();
     let (ctl, _commands) = crate::controller::tests::test_controller();
     app.handle(
@@ -1688,10 +1688,10 @@ fn welcome_hero_slot_replaces_only_the_martty_lockup() {
     assert!(frame.contains('░'), "hollow HARNESS:\n{frame}");
     assert!(frame.contains("Into the Unknown"), "tagline:\n{frame}");
     assert!(
-        !frame.contains("https://martty.sh"),
-        "Martty hero replaced:\n{frame}"
+        !frame.contains("https://crow-ai.dev"),
+        "crow-ai.dev hero replaced:\n{frame}"
     );
-    assert!(frame.contains("martty"), "session facts remain:\n{frame}");
+    assert!(frame.contains("crow-term"), "version row remains:\n{frame}");
     assert!(
         frame.contains("/help commands"),
         "help row remains:\n{frame}"
@@ -1772,7 +1772,7 @@ fn welcome_info_slot_replaces_only_the_native_information_region() {
     );
     let frame = dump_frame(&mut app, 140, 60);
     assert!(
-        frame.contains("https://martty.sh"),
+        frame.contains("https://crow-ai.dev"),
         "Hero remains:\n{frame}"
     );
     assert!(
@@ -1780,7 +1780,7 @@ fn welcome_info_slot_replaces_only_the_native_information_region() {
         "custom info:\n{frame}"
     );
     assert!(
-        !frame.contains("martty "),
+        !frame.contains("crow-term "),
         "native version row replaced:\n{frame}"
     );
     assert!(
@@ -2565,7 +2565,7 @@ fn draw_fills_the_chat_view_snapshot() {
         app.chat_view
             .lines
             .iter()
-            .any(|l| l.contains("https://martty.sh")),
+            .any(|l| l.contains("https://crow-ai.dev")),
         "snapshot mirrors rendered content"
     );
 }
