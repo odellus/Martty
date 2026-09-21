@@ -11,24 +11,24 @@ use ratatui::text::{Line, Span};
 
 use crate::theme::{lerp, Mode, Theme, DEEPSEEK_200, DEEPSEEK_50};
 
-/// The crow-cli wordmark, 7 rows of [`ART_WIDTH`] columns.
-pub const CROW_CLI: [&str; 7] = [
-    r#"                                                ___           "#,
-    r#"                                               /\_ \    __    "#,
-    r#"  ___   _ __   ___   __  __  __             ___\//\ \  /\_\   "#,
-    r#" /'___\/\`'__\/ __`\/\ \/\ \/\ \  _______  /'___\\ \ \ \/\ \  "#,
-    r#"/\ \__/\ \ \//\ \L\ \ \ \_/ \_/ \/\______\/\ \__/ \_\ \_\ \ \ "#,
-    r#"\ \____\\ \_\\ \____/\ \___x___/'\/______/\ \____\/\____\\ \_\"#,
-    r#" \/____/ \/_/ \/___/  \/__//__/            \/____/\/____/ \/_/"#,
+/// The crow-cli wordmark, 6 rows of [`ART_WIDTH`] columns.
+pub const CROW_CLI: [&str; 6] = [
+	r#"                                                   __    "#,
+	r#"  ___   _ __   ___   __  __  __              __   /\_\   "#,
+	r#" /'___\/\`'__\/ __`\/\ \/\ \/\ \  _______  /'__`\ \/\ \  "#,
+	r#"/\ \__/\ \ \//\ \L\ \ \ \_/ \_/ \/\______\/\ \L\.\_\ \ \ "#,
+	r#"\ \____\\ \_\\ \____/\ \___x___/'\/______/\ \__/.\_\\ \_\"#,
+	r#" \/____/ \/_/ \/___/  \/__//__/            \/__/\/_/ \/_/"#,
 ];
 
 /// Columns per row of [`CROW_CLI`]. Rows stay rectangular so centering
 /// cannot shear the wordmark.
-const ART_WIDTH: usize = 62;
+const ART_WIDTH: usize = 57;
 
 /// The column `crow` ends on: everything before it takes the gradient,
-/// `-cli` from here on takes the terminal ink.
-const ART_SPLIT: usize = 33;
+/// `-cli` from here on takes the terminal ink. The hyphen box top lives in
+/// row 2 at columns 34-40, so the split hands the whole box to `-cli`.
+const ART_SPLIT: usize = 34;
 
 /// The wordmark as plain text, for terminals too narrow for the art.
 const WORDMARK: &str = "crow-cli";

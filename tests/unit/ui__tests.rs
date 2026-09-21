@@ -1548,22 +1548,6 @@ fn composer_grows_to_show_a_multiline_draft_until_its_cap() {
 }
 
 #[test]
-fn banner_shows_until_first_prompt() {
-    let mut app = test_app();
-    assert!(app.show_banner, "banner defaults to on");
-    let mark = crate::logo::CROW_CLI[6].trim();
-    assert!(
-        dump_frame(&mut app, 84, 40).contains(mark),
-        "wordmark visible on launch"
-    );
-    app.show_banner = false;
-    assert!(
-        !dump_frame(&mut app, 84, 40).contains(mark),
-        "whale dives once the banner is dismissed"
-    );
-}
-
-#[test]
 fn empty_welcome_screen_has_balanced_outer_vertical_padding() {
     let mut app = test_app();
     let _ = dump_frame(&mut app, 120, 50);

@@ -38,8 +38,11 @@ fn crow_cli_tiers() {
     }
 
     // The art needs its own width plus a column of air on either side.
-    assert_eq!(crow_cli_logo_lines(&theme, 64).len(), CROW_CLI.len());
-    assert_eq!(crow_cli_logo_lines(&theme, 63).len(), 1);
+    assert_eq!(
+        crow_cli_logo_lines(&theme, (ART_WIDTH + 2) as u16).len(),
+        CROW_CLI.len()
+    );
+    assert_eq!(crow_cli_logo_lines(&theme, (ART_WIDTH + 1) as u16).len(), 1);
 
     for width in [40u16, 16, 8] {
         let small = crow_cli_logo_lines(&theme, width);
@@ -125,7 +128,7 @@ fn crow_cli_split_reassembles_the_wordmark() {
         assert!(!crow.contains("______"), "row {index} leaks the hyphen");
         assert_eq!(
             cli.contains("______"),
-            (3..=5).contains(&index),
+            (2..=4).contains(&index),
             "row {index}"
         );
     }
