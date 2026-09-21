@@ -38,11 +38,13 @@ pub fn workspace_slug(workspace: &str) -> String {
     format!("-{}--", workspace.replace('/', "-"))
 }
 
-/// Candidate session roots, existing ones only: the configured root plus
-/// the local dsh store.
+/// Candidate session roots, existing ones only: the configured root plus the
+/// homes this client has moved out of (`~/.martty`, then the local dsh store),
+/// so sessions written before a move stay resumable.
 fn session_roots_from(cfg_root: &str, home: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = vec![PathBuf::from(cfg_root)];
     if let Some(home) = home {
+        roots.push(home.join(".martty").join("sessions"));
         roots.push(home.join(".dsh").join("sessions"));
         roots.push(home.join(".dsh-tui").join("sessions"));
     }

@@ -76,17 +76,25 @@ fn lists_workspace_sessions_newest_first_and_skips_current() {
 }
 
 #[test]
-fn legacy_dsh_tui_sessions_remain_discoverable_after_the_martty_move() {
-    let home = std::env::temp_dir().join(format!("martty-legacy-sessions-{}", std::process::id()));
-    let current = home.join(".martty/sessions");
-    let legacy = home.join(".dsh-tui/sessions");
-    std::fs::create_dir_all(&current).unwrap();
-    std::fs::create_dir_all(&legacy).unwrap();
+fn sessions_from_the_martty_and_dsh_homes_remain_discoverable() {
+    let home = std::env::temp_dir().join(format!("crow-legacy-sessions-{}", std::process::id()));
+    let current = home.join(".agents/crow/sessions");
+    let martty = home.join(".martty/sessions");
+    let dsh_tui = home.join(".dsh-tui/sessions");
+    let dsh = home.join(".dsh/sessions");
+    for dir in [&current, &martty, &dsh_tui, &dsh] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
 
     let roots = session_roots_from(current.to_str().unwrap(), Some(&home));
 
-    assert!(roots.contains(&current));
-    assert!(roots.contains(&legacy));
+    for dir in [&current, &martty, &dsh_tui, &dsh] {
+        assert!(
+            roots.contains(&dir),
+            "{} missing from {roots:?}",
+            dir.display()
+        );
+    }
     let _ = std::fs::remove_dir_all(home);
 }
 

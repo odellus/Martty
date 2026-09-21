@@ -166,16 +166,15 @@ fn lang_switch_repaints_immediately_and_persists_for_the_workspace() {
     let current = std::path::Path::new(&restarted.cfg.session_root).join("settings.json");
     assert!(
         current.is_file(),
-        "legacy settings migrate to the Martty filename"
+        "legacy settings migrate to the current filename"
     );
     assert!(
         legacy.is_file(),
         "migration preserves the legacy settings file"
     );
-    let saved: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(current).expect("read migrated Martty settings"),
-    )
-    .unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(current).expect("read migrated settings"))
+            .unwrap();
     assert_eq!(
         saved["defaultHarness"], "crow-cli",
         "/lang preserves Client-owned settings"

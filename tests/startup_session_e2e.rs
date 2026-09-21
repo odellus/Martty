@@ -227,7 +227,7 @@ fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
         .arg(home.join("sessions"))
         .args(args)
         .env("TERM", "xterm-256color")
-        .env("MARTTY_HOME", &home)
+        .env("CROW_HOME", &home)
         .env("STUB_LOG", home.join("wire.jsonl"))
         .env("STUB_CAPS", caps)
         .env_remove("TERM_PROGRAM")

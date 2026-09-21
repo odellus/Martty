@@ -64,7 +64,7 @@ USAGE:
 
 OPTIONS:
   -w, --workspace <dir>     agent workspace (default: cwd)
-      --session-root <dir>  session JSONL root (default: $MARTTY_HOME/sessions)
+      --session-root <dir>  session JSONL root (default: $CROW_HOME/sessions)
       --session-id <id>     resume/continue a durable session id
       --provider <id>       provider route (default: deepseek-official)
       --model <id>          model id (default: $DSH_MODEL or deepseek-v4-flash)

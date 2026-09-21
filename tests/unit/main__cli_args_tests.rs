@@ -28,22 +28,58 @@ fn help_mentions_demo_skin() {
 }
 
 #[test]
-fn martty_home_precedence_owns_the_default_session_root() {
+fn crow_home_precedence_owns_the_default_session_root() {
     assert_eq!(
-        crate::runtime::martty_home_from(Some("/opt/martty"), Some("/opt/dsh"), "/Users/test",),
-        PathBuf::from("/opt/martty")
+        crate::runtime::crow_home_from(
+            Some("/opt/crow"),
+            Some("/opt/martty"),
+            Some("/opt/dsh"),
+            "/Users/test"
+        ),
+        PathBuf::from("/opt/crow")
     );
     assert_eq!(
-        crate::runtime::martty_home_from(None, Some("/opt/dsh"), "/Users/test"),
-        PathBuf::from("/opt/dsh/.martty")
+        crate::runtime::crow_home_from(None, Some("/opt/martty"), Some("/opt/dsh"), "/Users/test"),
+        PathBuf::from("/opt/martty"),
+        "a pre-rebrand MARTTY_HOME keeps its data"
     );
     assert_eq!(
-        crate::runtime::martty_home_from(None, None, "/Users/test"),
-        PathBuf::from("/Users/test/.martty")
+        crate::runtime::crow_home_from(None, None, Some("/opt/dsh"), "/Users/test"),
+        PathBuf::from("/opt/dsh/.agents/crow")
     );
     assert_eq!(
-        crate::runtime::martty_home_from(None, None, "/Users/test").join("sessions"),
-        PathBuf::from("/Users/test/.martty/sessions")
+        crate::runtime::crow_home_from(None, None, None, "/Users/test"),
+        PathBuf::from("/Users/test/.agents/crow")
+    );
+    assert_eq!(
+        crate::runtime::crow_home_from(None, None, None, "/Users/test").join("sessions"),
+        PathBuf::from("/Users/test/.agents/crow/sessions")
+    );
+}
+
+#[test]
+fn legacy_settings_come_from_the_martty_home_then_dsh_tui() {
+    let default_root = PathBuf::from("/Users/test/.agents/crow/sessions");
+    let paths = crate::runtime::legacy_settings_paths_from(
+        default_root.to_str().unwrap(),
+        &default_root,
+        "/Users/test",
+    );
+    assert_eq!(
+        paths,
+        [
+            PathBuf::from("/Users/test/.martty/settings.json"),
+            PathBuf::from("/Users/test/.dsh-tui/sessions/dsh-tui-settings.json"),
+        ],
+        "the abandoned home is tried before the older dsh-tui file"
+    );
+
+    let custom =
+        crate::runtime::legacy_settings_paths_from("/work/sessions", &default_root, "/Users/test");
+    assert_eq!(
+        custom,
+        [PathBuf::from("/work/sessions/dsh-tui-settings.json")],
+        "a custom --session-root has no ~/.martty analogue"
     );
 }
 

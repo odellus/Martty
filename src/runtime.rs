@@ -2,49 +2,77 @@
 
 use std::path::{Path, PathBuf};
 
-pub fn martty_home_from(
+/// `<root>/.agents/crow` — crow-cli's own config dir, now shared as this
+/// client's home.
+fn agents_crow(root: &str) -> PathBuf {
+    Path::new(root).join(".agents").join("crow")
+}
+
+/// Resolve the crow home: an explicit `CROW_HOME`, then the legacy
+/// `MARTTY_HOME` (so a pre-rebrand install keeps its data), then
+/// `$DSH_HOME/.agents/crow`, then `~/.agents/crow`.
+pub fn crow_home_from(
+    crow_home: Option<&str>,
     martty_home: Option<&str>,
     dsh_home: Option<&str>,
     user_home: &str,
 ) -> PathBuf {
-    if let Some(home) = martty_home.filter(|value| !value.is_empty()) {
-        return PathBuf::from(home);
+    for explicit in [crow_home, martty_home] {
+        if let Some(home) = explicit.filter(|value| !value.is_empty()) {
+            return PathBuf::from(home);
+        }
     }
     if let Some(home) = dsh_home.filter(|value| !value.is_empty()) {
-        return Path::new(home).join(".martty");
+        return agents_crow(home);
     }
-    Path::new(user_home).join(".martty")
+    agents_crow(user_home)
 }
 
-pub fn martty_home() -> PathBuf {
+pub fn crow_home() -> PathBuf {
+    let crow = std::env::var("CROW_HOME").ok();
     let martty = std::env::var("MARTTY_HOME").ok();
     let dsh = std::env::var("DSH_HOME").ok();
     let user = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    martty_home_from(martty.as_deref(), dsh.as_deref(), &user)
+    crow_home_from(crow.as_deref(), martty.as_deref(), dsh.as_deref(), &user)
 }
 
 pub fn default_session_root() -> PathBuf {
-    martty_home().join("sessions")
+    crow_home().join("sessions")
 }
 
 pub fn settings_path(session_root: &str) -> PathBuf {
     if Path::new(session_root) == default_session_root() {
-        martty_home().join("settings.json")
+        crow_home().join("settings.json")
     } else {
         Path::new(session_root).join("settings.json")
     }
 }
 
-pub fn legacy_settings_path(session_root: &str) -> PathBuf {
-    if Path::new(session_root) == default_session_root() {
-        let user = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        Path::new(&user)
-            .join(".dsh-tui")
-            .join("sessions")
-            .join("dsh-tui-settings.json")
+/// Settings files this build no longer writes but must still read, newest
+/// first: the `~/.martty` home the rebrand left behind, then the older
+/// `.dsh-tui` file. A custom `--session-root` has no `~/.martty` analogue —
+/// its own `settings.json` is the current path — so only `.dsh-tui` applies.
+pub fn legacy_settings_paths_from(
+    session_root: &str,
+    default_root: &Path,
+    user_home: &str,
+) -> Vec<PathBuf> {
+    if Path::new(session_root) == default_root {
+        vec![
+            Path::new(user_home).join(".martty").join("settings.json"),
+            Path::new(user_home)
+                .join(".dsh-tui")
+                .join("sessions")
+                .join("dsh-tui-settings.json"),
+        ]
     } else {
-        Path::new(session_root).join("dsh-tui-settings.json")
+        vec![Path::new(session_root).join("dsh-tui-settings.json")]
     }
+}
+
+pub fn legacy_settings_paths(session_root: &str) -> Vec<PathBuf> {
+    let user = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    legacy_settings_paths_from(session_root, &default_session_root(), &user)
 }
 
 #[derive(Clone, Debug)]

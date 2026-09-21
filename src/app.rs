@@ -27,7 +27,7 @@ use crate::events::parse_notification;
 use crate::input::{Action, VimMode};
 use crate::locale::{Locale, UiSettings};
 use crate::markdown::ToneMode;
-use crate::runtime::{legacy_settings_path, settings_path, RuntimeConfig};
+use crate::runtime::{legacy_settings_paths, settings_path, RuntimeConfig};
 use crate::theme::Theme;
 use crate::transcript::{clamp_str, NoticeLevel, Transcript};
 
@@ -5626,23 +5626,25 @@ impl App {
             return settings;
         }
         // A current file that exists but does not parse is quarantined by the
-        // next save; until then fall through to the legacy file rather than
+        // next save; until then fall through to the legacy files rather than
         // silently dropping the user's preferences.
-        let legacy = legacy_settings_path(&cfg.session_root);
-        let Some((text, settings)) = std::fs::read_to_string(legacy).ok().and_then(|text| {
-            serde_json::from_str::<UiSettings>(&text)
-                .ok()
-                .map(|settings| (text, settings))
-        }) else {
-            return UiSettings::default();
-        };
-        if let Some(dir) = current.parent() {
-            let _ = std::fs::create_dir_all(dir);
+        for legacy in legacy_settings_paths(&cfg.session_root) {
+            let Some((text, settings)) = std::fs::read_to_string(&legacy).ok().and_then(|text| {
+                serde_json::from_str::<UiSettings>(&text)
+                    .ok()
+                    .map(|settings| (text, settings))
+            }) else {
+                continue;
+            };
+            if let Some(dir) = current.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            if !current.exists() {
+                let _ = std::fs::write(&current, text);
+            }
+            return settings;
         }
-        if !current.exists() {
-            let _ = std::fs::write(current, text);
-        }
-        settings
+        UiSettings::default()
     }
 
     fn save_settings(&self) {
