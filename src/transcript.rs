@@ -235,15 +235,10 @@ fn build_body(
             if body.is_empty() {
                 return BodyBuild::plain(Vec::new(), 0);
             }
-            let body_style = Style::default()
-                .fg(theme.fg_tertiary)
-                .add_modifier(Modifier::ITALIC);
-            let lines: Vec<Line> = wrap(body, width.saturating_sub(2))
-                .into_iter()
-                .map(|l| {
-                    Line::from(vec![Span::raw("  "), Span::styled(l, body_style)])
-                })
-                .collect();
+            // Thoughts render through the same markdown pipeline as
+            // assistant text — structure, code frames, token colors — behind
+            // a quote gutter that marks the block as thinking.
+            let lines = crate::markdown::render_reasoning(body, theme, tone, width);
             let meta = lines.len();
             BodyBuild::plain(lines, meta)
         }

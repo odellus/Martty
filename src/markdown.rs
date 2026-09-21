@@ -222,6 +222,29 @@ pub fn render(text: &str, theme: &Theme, tone: ToneMode, width: usize) -> Vec<Li
     out
 }
 
+/// Render reasoning/thinking text through the same markdown pipeline as
+/// assistant text, framed by a quote gutter: every line — blank separators
+/// included — carries an accent bar plus one space of indent, so a thought
+/// reads as quoted material while keeping full markdown fidelity (structure,
+/// code frames, token colors, tables). The bar borrows the thinking accent
+/// (`brand_soft`), the color the live `✻ thinking…` header already wears.
+pub fn render_reasoning(
+    text: &str,
+    theme: &Theme,
+    tone: ToneMode,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let bar = Style::default().fg(theme.brand_soft);
+    render(text, theme, tone, width.saturating_sub(2))
+        .into_iter()
+        .map(|mut line| {
+            line.spans.insert(0, Span::raw(" "));
+            line.spans.insert(0, Span::styled("▎", bar));
+            line
+        })
+        .collect()
+}
+
 /// Sentinel prefix that marks fence delimiter lines (see
 /// `DeepSeekStyleSheet::code_block_fence`). Two NUL bytes: never produced
 /// by real markdown content.

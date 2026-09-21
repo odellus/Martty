@@ -548,9 +548,12 @@ fn tool_output_is_open_by_default_and_collapse_all_takes_it_back() {
 #[test]
 fn reasoning_is_open_by_default_and_collapse_all_keeps_only_the_heading() {
     let mut tr = t("s");
+    // Paragraph-separated so the markdown pipeline lays them out as five
+    // body rows (soft breaks would merge single newlines into one paragraph,
+    // exactly like assistant text).
     tr.apply(UiEvent::ReasoningDelta {
         session: "s".into(),
-        text: "r1\nr2\nr3\nr4\nr5".into(),
+        text: "r1\n\nr2\n\nr3\n\nr4\n\nr5".into(),
     });
     // Assistant text closes the reasoning stream (`done`), which is the state
     // a finished thought is read in.
@@ -569,13 +572,14 @@ fn reasoning_is_open_by_default_and_collapse_all_keeps_only_the_heading() {
     let p = plain(&tr.lines(&theme, crate::markdown::ToneMode::Single, 40, ' '));
     assert!(p.contains("r1"), "a finished thought is readable without a click: {p}");
     assert!(p.contains("r5"), "all of it, not just a preview: {p}");
-    assert!(p.contains("5 lines"), "the heading still counts them: {p}");
+    assert!(p.contains("9 lines"), "the heading still counts them: {p}");
+    assert!(p.contains("▎"), "thoughts render behind the quote gutter: {p}");
 
     tr.collapse_all = true;
     let p = plain(&tr.lines(&theme, crate::markdown::ToneMode::Single, 40, ' '));
     assert!(!p.contains("r1"), "collapsed drops the body: {p}");
     assert!(!p.contains("r5"), "collapsed drops all of it: {p}");
-    assert!(p.contains("5 lines"), "the heading survives: {p}");
+    assert!(p.contains("9 lines"), "the heading survives: {p}");
 }
 
 #[test]

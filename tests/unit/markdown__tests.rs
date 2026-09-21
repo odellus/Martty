@@ -138,6 +138,52 @@ fn blockquote_gets_prefix_and_italic() {
 }
 
 #[test]
+fn reasoning_gutter_frames_markdown_including_blank_lines() {
+    let theme = Theme::dark();
+    let lines = render_reasoning(
+        "lead\n\n- item one\n- item two\n\n```rust\nlet x = 1;\n```",
+        &theme,
+        ToneMode::Single,
+        40,
+    );
+    assert!(!lines.is_empty());
+    // Every line — blank paragraph separators included — carries the gutter:
+    // an accent bar in the thinking color plus one space of indent.
+    let mut blanks = 0;
+    for l in &lines {
+        assert_eq!(l.spans[0].content, "▎", "bar on every line: {l:?}");
+        assert_eq!(l.spans[0].style.fg, Some(theme.brand_soft), "accent");
+        assert_eq!(l.spans[1].content, " ", "one space of indent: {l:?}");
+        assert!(line_width(l) <= 40, "budget: {}", line_width(l));
+        if l.spans.len() == 2 {
+            blanks += 1;
+        }
+    }
+    assert!(blanks > 0, "blank separators keep the gutter too");
+    // The body itself is markdown-rendered, not raw source.
+    let text = plain(&lines);
+    assert!(text.contains("lead"), "{text}");
+    assert!(text.contains("item one"), "{text}");
+    assert!(text.contains("┌─ rust ─"), "code frames survive: {text}");
+    assert!(text.contains("let x = 1;"), "{text}");
+}
+
+#[test]
+fn reasoning_gutter_keeps_full_fidelity_markdown() {
+    let theme = Theme::dark();
+    let lines = render_reasoning(
+        "**plan**:\n\n| a | b |\n|---|---|\n| 1 | 2 |",
+        &theme,
+        ToneMode::Single,
+        40,
+    );
+    let text = plain(&lines);
+    assert!(text.contains("plan"), "{text}");
+    assert!(text.contains("a"), "{text}");
+    assert!(text.contains("│"), "table frame survives: {text}");
+}
+
+#[test]
 fn list_markers_render() {
     let lines = render_dark("- item one\n2. item two", 40);
     let text = plain(&lines);
