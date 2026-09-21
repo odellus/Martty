@@ -139,7 +139,7 @@ fn composer_cap_persistently_shows_the_workspace() {
     let frame = dump_frame(&mut app, 120, 20);
     let cap = frame
         .lines()
-        .find(|line| line.contains("Tip"))
+        .find(|line| line.contains('⛶'))
         .expect("composer cap");
 
     assert!(
@@ -157,7 +157,7 @@ fn composer_cap_preserves_the_workspace_tail_on_narrow_terminals() {
     let frame = dump_frame(&mut app, 60, 20);
     let cap = frame
         .lines()
-        .find(|line| line.contains("Tip"))
+        .find(|line| line.contains('⛶'))
         .expect("composer cap");
 
     assert!(cap.contains("· …/deepseek-harness"), "{cap}");
@@ -173,7 +173,7 @@ fn composer_cap_shows_git_branch_after_the_project_path() {
     let frame = dump_frame(&mut app, 120, 20);
     let cap = frame
         .lines()
-        .find(|line| line.contains("Tip"))
+        .find(|line| line.contains('⛶'))
         .expect("composer cap");
     assert!(cap.contains("· /work/acme/martty:ui-tweak"), "{cap}");
 
@@ -182,7 +182,7 @@ fn composer_cap_shows_git_branch_after_the_project_path() {
     let frame = dump_frame(&mut app, 120, 20);
     let cap = frame
         .lines()
-        .find(|line| line.contains("Tip"))
+        .find(|line| line.contains('⛶'))
         .expect("composer cap");
     assert!(cap.contains("· /work/acme/martty"), "{cap}");
     assert!(!cap.contains("martty:"), "{cap}");
@@ -198,7 +198,7 @@ fn composer_cap_drops_git_branch_on_narrow_terminals() {
     let frame = dump_frame(&mut app, 60, 20);
     let cap = frame
         .lines()
-        .find(|line| line.contains("Tip"))
+        .find(|line| line.contains('⛶'))
         .expect("composer cap");
     assert!(
         !cap.contains(":a-long-branch-name"),

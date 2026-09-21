@@ -225,11 +225,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let (main, right) = shell_areas(body, app);
 
-    // Composer card: one rounded box wrapping the cap row (dock / tip /
-    // · workspace title) and the native input surface (input well on top,
-    // one meta row — run state + mode/permission chips + model — at the
-    // bottom). The old shortcut-hints row is gone (the tip banner and
-    // /keys carry that).
+    // Composer card: one rounded box wrapping the cap row (dock / transient
+    // feedback / · workspace title) and the native input surface (input well
+    // on top, one meta row — run state + mode/permission chips + model — at
+    // the bottom). The old shortcut-hints row is gone (`/keys` carries that).
     let child_view = app.active_subagent.is_some();
     let approval_h = if !child_view && !app.pending_cordis_approvals.is_empty() && main.height >= 12
     {
@@ -243,9 +242,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let gap_h = if child_view { 0 } else { 1 };
     // Exactly one cap row tops the box (the `╭ … ─╮` border line). The
     // plugin input dock (plan-view's PLAN summary) wins the row when it
-    // has nodes; otherwise the tip line carries it. The row is worth
-    // keeping down to 10 rows tall — below that (chat would drop under
-    // ~5 rows) the borderless fallback takes over instead.
+    // has nodes; otherwise transient action feedback carries it. The row
+    // is worth keeping down to 10 rows tall — below that (chat would drop
+    // under ~5 rows) the borderless fallback takes over instead.
     let cap_h = if !child_view && main.height >= 10 {
         1
     } else {
@@ -2679,35 +2678,18 @@ fn draw_selection_overlay(f: &mut Frame, app: &App, inner: Rect, start: usize) {
     }
 }
 
+/// Transient action feedback ("copied", "saved", errors) for the composer cap
+/// row. Nothing to report means an empty row — the rotating ambient hints are
+/// gone, so the cap carries only the workspace title and the dock.
 fn tip_line(app: &App) -> Line<'static> {
-    let theme = app.theme;
-    let transient = app.tip.is_some();
-    let text = match &app.tip {
-        Some((t, _)) => t.clone(),
-        None => app.locale.ambient_tip(app.ambient_tip_idx).to_string(),
+    let Some((text, _)) = &app.tip else {
+        return Line::default();
     };
-
-    let mut spans: Vec<Span> = vec![Span::raw(" ")];
-    if transient {
-        // Action feedback reads brighter than the rotating hints.
-        spans.push(Span::styled(text, Style::default().fg(theme.fg)));
-    } else {
-        spans.push(Span::styled(
-            app.locale.tr("Tip", "提示").to_string(),
-            Style::default()
-                .fg(theme.brand_soft)
-                .add_modifier(Modifier::BOLD),
-        ));
-        // Rotating hints read a tier below the chat body text above — the
-        // banner is furniture, not content. Gray-blue keeps it on-brand.
-        spans.push(Span::styled(
-            format!(" · {text}"),
-            Style::default().fg(theme.hint),
-        ));
-    }
-    spans.push(Span::raw(" "));
-
-    Line::from(spans)
+    Line::from(vec![
+        Span::raw(" "),
+        Span::styled(text.clone(), Style::default().fg(app.theme.fg)),
+        Span::raw(" "),
+    ])
 }
 
 fn compact_workspace(path: &str, max_width: usize) -> String {
@@ -2815,7 +2797,7 @@ fn ellipsize_line(line: Line<'static>, max_width: usize, style: Style) -> Line<'
 }
 
 /// The composer card as one rounded box: the cap row doubles as the top
-/// border (plugin input dock wins over the tip line, plus the right-
+/// border (plugin input dock wins over transient feedback, plus the right-
 /// aligned · workspace title) and the meta row rides the bottom border —
 /// the input well owns every inner row. The brand glow replaces the left
 /// border while a turn runs.
@@ -2848,8 +2830,8 @@ fn draw_composer_box(
     let dock_line = dock_sections
         .as_ref()
         .map(|sections| compact_input_dock_sections_line(sections, &theme));
-    // The dock (PLAN summary) owns the single cap row; the tip line only
-    // appears when no dock is present.
+    // The dock (PLAN summary) owns the single cap row; transient action
+    // feedback only appears when no dock is present.
     let title = ellipsize_line(
         dock_line.clone().unwrap_or_else(|| tip_line(app)),
         title_budget,

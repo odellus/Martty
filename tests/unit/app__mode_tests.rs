@@ -514,8 +514,8 @@ fn pending_cordis_approval_renders_above_tips_and_alt_shortcut_answers_it() {
     );
     let frame = crate::ui::dump_frame(&mut app, 120, 24);
     let approval = frame.find("Right sidebar").expect("approval row");
-    let tips = frame.find("Tip").expect("tip row");
-    assert!(approval < tips, "approval must render above tips");
+    let cap = frame.find('⛶').expect("composer cap row");
+    assert!(approval < cap, "approval must render above the composer");
 
     app.handle(
         AppEvent::Term(Event::Key(KeyEvent::new(

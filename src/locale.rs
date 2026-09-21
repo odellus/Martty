@@ -107,36 +107,7 @@ impl Locale {
             _ => fallback,
         }
     }
-
-    pub fn ambient_tip(self, index: usize) -> &'static str {
-        const EN: [&str; 8] = [
-            "esc interrupts a running turn — your draft survives",
-            "type ! to run a command in the session's persistent local shell",
-            "enter queues a follow-up; ctrl+enter steers the active turn now",
-            "click a tool to expand it · wheel always scrolls the conversation",
-            "the footer under the composer shows token usage + cache hit rate",
-            "answers render markdown: headings, code, links, and images",
-            "/agent or ctrl+shift+a switches the agent preset",
-            "/new starts a fresh session · /theme switches packs or toggles dark/light",
-        ];
-        const ZH: [&str; 8] = [
-            "esc 可中断当前轮次，草稿会保留",
-            "输入 ! 可直接运行本地命令，不经过 Agent",
-            "enter 会排队后续消息；ctrl+enter 立即 steer 当前轮次",
-            "点击工具可展开 · 滚轮始终滚动对话",
-            "输入框下方显示 token 用量和缓存命中率",
-            "回答支持 Markdown：标题、代码、链接和图片",
-            "/agent 或 ctrl+shift+a 可切换 Agent 预设",
-            "/new 新建会话 · /theme 切换主题包或明暗模式",
-        ];
-        match self {
-            Self::En => EN[index % EN.len()],
-            Self::Zh => ZH[index % ZH.len()],
-        }
-    }
 }
-
-pub const AMBIENT_TIP_COUNT: usize = 8;
 
 fn default_ui_preset() -> String {
     "default".into()

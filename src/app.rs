@@ -1478,8 +1478,6 @@ pub struct App {
     pub tip: Option<(String, Instant)>,
     /// DSH_TUI_KEYDEBUG=1: echo every delivered key event in the tip row.
     key_debug: bool,
-    pub ambient_tip_idx: usize,
-    pub ambient_tip_at: Instant,
     ctrl_c_armed: Option<CtrlCQuitChord>,
     pub session_id: String,
     /// Parked sessions — every session except the viewed one (issue #94).
@@ -1940,8 +1938,6 @@ impl App {
             effort_choices: Vec::new(),
             tip: None,
             key_debug: std::env::var("DSH_TUI_KEYDEBUG").is_ok_and(|v| v == "1"),
-            ambient_tip_idx: 0,
-            ambient_tip_at: Instant::now(),
             ctrl_c_armed: None,
             session_id,
             parked: Vec::new(),
@@ -2490,13 +2486,6 @@ impl App {
             if Instant::now() >= *until {
                 self.prompt_flash = None;
                 self.prompt_flash_lines = None;
-                self.needs_redraw = true;
-            }
-        }
-        if self.ambient_tip_at.elapsed() > Duration::from_secs(14) {
-            self.ambient_tip_at = Instant::now();
-            self.ambient_tip_idx = (self.ambient_tip_idx + 1) % crate::locale::AMBIENT_TIP_COUNT;
-            if self.tip.is_none() {
                 self.needs_redraw = true;
             }
         }
