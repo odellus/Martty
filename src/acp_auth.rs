@@ -425,8 +425,8 @@ fn needs_auth_notice(snapshot: &AuthSnapshot, locale: crate::locale::Locale) -> 
         }
         if method.form {
             lines.push(locale.tr(
-                "  /auth <api-key>  submits through ACP authenticate (martty does not keep it)",
-                "  /auth <api-key>  通过 ACP authenticate 提交（martty 不保存密钥）",
+                "  /auth <api-key>  submits through ACP authenticate (crow-term does not keep it)",
+                "  /auth <api-key>  通过 ACP authenticate 提交（crow-term 不保存密钥）",
             ).into());
         } else if method.terminal_launch.is_some() {
             lines.push(locale.tr(

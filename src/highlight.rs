@@ -1,4 +1,4 @@
-//! Syntax highlighting for fenced code: syntect's tokenizer, martty's palette.
+//! Syntax highlighting for fenced code: syntect's tokenizer, crow-term's palette.
 //!
 //! tui-markdown ships its own `highlight-code` feature, but `markdown::render`
 //! re-renders code rows itself — it has to, to wrap them to the chat width and
@@ -135,8 +135,8 @@ fn palette(theme: &Theme, base: Style) -> SynTheme {
         },
     };
     SynTheme {
-        name: Some("martty".into()),
-        author: Some("martty".into()),
+        name: Some("crow-term".into()),
+        author: Some("crow-term".into()),
         settings: ThemeSettings {
             foreground: base.fg.map(syn),
             background: base.bg.map(syn),

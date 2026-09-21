@@ -228,7 +228,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "quit",
         usage: "/quit",
-        desc: "exit martty",
+        desc: "exit crow-term",
     },
     SlashCommand {
         name: "resume",

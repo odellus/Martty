@@ -2,10 +2,10 @@ use std::process::Command;
 
 #[test]
 fn help_names_the_current_expand_shortcut() {
-    let output = Command::new(env!("CARGO_BIN_EXE_martty"))
+    let output = Command::new(env!("CARGO_BIN_EXE_crow-term"))
         .arg("--help")
         .output()
-        .expect("run martty --help");
+        .expect("run crow-term --help");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("help is utf-8");
@@ -21,10 +21,10 @@ fn help_names_the_current_expand_shortcut() {
 
 #[test]
 fn help_names_demo_skin() {
-    let output = Command::new(env!("CARGO_BIN_EXE_martty"))
+    let output = Command::new(env!("CARGO_BIN_EXE_crow-term"))
         .arg("--help")
         .output()
-        .expect("run martty --help");
+        .expect("run crow-term --help");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("help is utf-8");

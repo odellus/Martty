@@ -88,7 +88,7 @@ impl Locale {
             "auth" => "ACP 登录（Backchat authenticate）",
             "lang" => "切换界面语言",
             "liang" => "召唤小难梁 — 🤫 空闲 · ⌨︎ 工作中",
-            "quit" => "退出 martty",
+            "quit" => "退出 crow-term",
             _ => fallback,
         }
     }

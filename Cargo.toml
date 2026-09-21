@@ -1,12 +1,12 @@
 [package]
-name = "deepseek-harness-tui"
+name = "crow-term"
 version = "0.2.39"
 edition = "2021"
 description = "Terminal-native ACP client UI with a Cordis client plugin tree"
 license = "MIT"
 
 [[bin]]
-name = "martty"
+name = "crow-term"
 path = "src/main.rs"
 
 [dependencies]

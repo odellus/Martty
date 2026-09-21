@@ -470,6 +470,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "crow-term"
+version = "0.2.39"
+dependencies = [
+ "agent-client-protocol",
+ "anyhow",
+ "crossterm",
+ "futures",
+ "image",
+ "libc",
+ "pulldown-cmark",
+ "ratatui",
+ "ratatui-explorer",
+ "ratatui-textarea",
+ "ruzstd",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "syntect",
+ "tokio",
+ "tokio-util",
+ "tui-markdown",
+ "tui-tree-widget",
+ "unicode-segmentation",
+ "unicode-width",
+ "yaml-rust2",
+]
+
+[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -555,34 +583,6 @@ dependencies = [
  "darling_core 0.24.0",
  "quote",
  "syn 3.0.3",
-]
-
-[[package]]
-name = "deepseek-harness-tui"
-version = "0.2.39"
-dependencies = [
- "agent-client-protocol",
- "anyhow",
- "crossterm",
- "futures",
- "image",
- "libc",
- "pulldown-cmark",
- "ratatui",
- "ratatui-explorer",
- "ratatui-textarea",
- "ruzstd",
- "serde",
- "serde_json",
- "signal-hook",
- "syntect",
- "tokio",
- "tokio-util",
- "tui-markdown",
- "tui-tree-widget",
- "unicode-segmentation",
- "unicode-width",
- "yaml-rust2",
 ]
 
 [[package]]

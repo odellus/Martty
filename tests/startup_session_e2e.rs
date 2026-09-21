@@ -1,4 +1,4 @@
-//! Tier 3 — end to end: the shipped `martty` binary on a real PTY, driving the
+//! Tier 3 — end to end: the shipped `crow-term` binary on a real PTY, driving the
 //! stub ACP agent in `tests/fixtures/stub_acp_agent.py`.
 //!
 //! The rungs below this one: `tests/unit/acp__tests.rs` unit-tests the re-attach
@@ -33,7 +33,7 @@ const COLS: usize = 110;
 /// test's assertion failure must not cascade into four spurious ones.
 static GATE: Mutex<()> = Mutex::new(());
 
-/// A live martty on a PTY: `text` is everything it has drawn, ANSI-stripped.
+/// A live crow-term on a PTY: `text` is everything it has drawn, ANSI-stripped.
 struct Pane {
     _gate: MutexGuard<'static, ()>,
     child: Child,
@@ -62,14 +62,14 @@ impl Pane {
             if missing.is_empty() {
                 return;
             }
-            if let Some(status) = self.child.try_wait().expect("poll martty") {
+            if let Some(status) = self.child.try_wait().expect("poll crow-term") {
                 panic!(
-                    "martty exited ({status}) before drawing {missing:?}\n{}",
+                    "crow-term exited ({status}) before drawing {missing:?}\n{}",
                     self.diagnosis()
                 );
             }
             if Instant::now() >= deadline {
-                panic!("martty never drew {missing:?}\n{}", self.diagnosis());
+                panic!("crow-term never drew {missing:?}\n{}", self.diagnosis());
             }
             thread::sleep(Duration::from_millis(25));
         }
@@ -80,8 +80,8 @@ impl Pane {
     fn assert_alive(&mut self) {
         self.pump();
         assert!(
-            self.child.try_wait().expect("poll martty").is_none(),
-            "martty exited on its own during startup\n{}",
+            self.child.try_wait().expect("poll crow-term").is_none(),
+            "crow-term exited on its own during startup\n{}",
             self.squeezed()
         );
     }
@@ -129,7 +129,7 @@ impl Pane {
     }
 
     /// Everything worth reading when a pane never got where it was going: what
-    /// was drawn, what reached the agent, and what martty said on stderr.
+    /// was drawn, what reached the agent, and what crow-term said on stderr.
     fn diagnosis(&self) -> String {
         format!(
             "pane:\n{}\nwire: {:?}\nmodel writes: {:?}\nstderr: {}",
@@ -174,7 +174,7 @@ impl Drop for Pane {
     }
 }
 
-/// Start martty on a fresh PTY against the stub agent. `None` (a skipped test)
+/// Start crow-term on a fresh PTY against the stub agent. `None` (a skipped test)
 /// when this machine has no python3 to run the fixture with.
 fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
     if Command::new("python3").arg("--version").output().is_err() {
@@ -182,8 +182,10 @@ fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
         return None;
     }
     let gate = GATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let home =
-        std::env::temp_dir().join(format!("martty-startup-e2e-{}-{tag}", std::process::id()));
+    let home = std::env::temp_dir().join(format!(
+        "crow-term-startup-e2e-{}-{tag}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&home);
     for sub in ["ws", "sessions"] {
         std::fs::create_dir_all(home.join(sub)).expect("create e2e home");
@@ -215,7 +217,7 @@ fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
     let master = unsafe { File::from_raw_fd(master_fd) };
     let slave = unsafe { File::from_raw_fd(slave_fd) };
     let stderr = File::create(home.join("stderr.txt")).expect("capture stderr");
-    let mut command = Command::new(env!("CARGO_BIN_EXE_martty"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_crow-term"));
     command
         .arg("--agent")
         .arg("python3")
@@ -237,7 +239,7 @@ fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
     if refuse {
         command.env("STUB_LOAD_FAIL", "1");
     }
-    let child = command.spawn().expect("start martty on the PTY");
+    let child = command.spawn().expect("start crow-term on the PTY");
 
     let flags = unsafe { libc::fcntl(master.as_raw_fd(), libc::F_GETFL) };
     assert!(flags >= 0);

@@ -406,8 +406,8 @@ pub const KEY_ROWS: &[KeyRow] = &[
         chords_mac: &["ctrl+q"],
         chords_other: &["ctrl+q"],
         ctx: CtxNote::Always,
-        desc_en: "quit martty",
-        desc_zh: "退出 martty",
+        desc_en: "quit crow-term",
+        desc_zh: "退出 crow-term",
         probes: &[p(KeyCode::Char('q'), CTRL, false)],
     },
     // --- scroll · navigate ------------------------------------------------

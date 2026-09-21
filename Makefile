@@ -2,7 +2,7 @@ RUST_CACHE_MAX_GIB ?= 20
 RUST_DISK_MIN_GIB ?= 10
 CARGO_ARGS ?= test --locked
 RUST_TARGET_DIR ?= $(if $(DSH_TUI_CARGO_TARGET_DIR),$(DSH_TUI_CARGO_TARGET_DIR),$(CURDIR)/target)
-TUI_DEBUG_BIN ?= $(RUST_TARGET_DIR)/debug/martty
+TUI_DEBUG_BIN ?= $(RUST_TARGET_DIR)/debug/crow-term
 REAL_AGENT_E2E_SPEC ?= scripts/real-agent-e2e.config-slider.json
 REAL_AGENT_E2E_ARGS ?=
 

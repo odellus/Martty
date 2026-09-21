@@ -57,10 +57,10 @@ use crate::controller::Controller;
 use crate::runtime::{default_session_root, RuntimeConfig};
 
 const HELP: &str = "\
-martty — terminal-native ACP client UI
+crow-term — terminal-native ACP client UI
 
 USAGE:
-  martty [OPTIONS]
+  crow-term [OPTIONS]
 
 OPTIONS:
   -w, --workspace <dir>     agent workspace (default: cwd)
@@ -177,7 +177,7 @@ fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
                 args_out.dump_frame = Some(dims);
             }
             "-V" | "--version" => {
-                println!("crow-term {}", env!("CARGO_PKG_VERSION"));
+                println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "-h" | "--help" => {
@@ -355,7 +355,7 @@ fn collect_event_batch(first: AppEvent, rx: &mpsc::Receiver<AppEvent>) -> (Vec<A
 }
 
 fn main() -> Result<()> {
-    // Die quietly on closed pipes (martty --dump-frame | head) instead of
+    // Die quietly on closed pipes (crow-term --dump-frame | head) instead of
     // panicking in println!.
     #[cfg(unix)]
     unsafe {
@@ -898,12 +898,12 @@ fn find_demo_skin_script(exe: &std::path::Path) -> Option<std::path::PathBuf> {
 /// fails loud — never silently paint the built-in default pack.
 fn reexec_demo_skin() -> Result<()> {
     let exe = std::env::current_exe()
-        .context("martty --demo-skin: cannot resolve the current executable (MARTTY_BIN)")?;
+        .context("crow-term --demo-skin: cannot resolve the current executable (MARTTY_BIN)")?;
     let looked =
         demo_skin_script_candidates(std::path::Path::new(env!("CARGO_MANIFEST_DIR")), &exe);
     let script = find_demo_skin_script(&exe).ok_or_else(|| {
         anyhow::anyhow!(
-            "martty --demo-skin requires npm/lib/demo-skin.js (looked in {}); refusing to fall back to the default palette",
+            "crow-term --demo-skin requires npm/lib/demo-skin.js (looked in {}); refusing to fall back to the default palette",
             looked
                 .iter()
                 .map(|p| p.display().to_string())
@@ -922,7 +922,7 @@ fn reexec_demo_skin() -> Result<()> {
         .status()
         .with_context(|| {
             format!(
-                "martty --demo-skin failed to spawn node {} (is node on PATH?); refusing to fall back to the default palette",
+                "crow-term --demo-skin failed to spawn node {} (is node on PATH?); refusing to fall back to the default palette",
                 script.display()
             )
         })?;

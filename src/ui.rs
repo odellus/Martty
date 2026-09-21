@@ -4070,7 +4070,7 @@ fn welcome_info_lines(app: &App) -> Vec<Line<'static>> {
     };
     out.push(kv(
         app.locale.tr("version", "版本"),
-        format!("crow-term {}", env!("CARGO_PKG_VERSION")),
+        format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
     ));
     out.push(kv(
         app.locale.tr("model", "模型"),
