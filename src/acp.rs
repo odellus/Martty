@@ -2977,3 +2977,7 @@ where
 
 #[path = "../tests/unit/acp__tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/acp__v2_wire_tests.rs"]
+mod v2_wire_tests;
