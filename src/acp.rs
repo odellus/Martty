@@ -54,7 +54,10 @@ use crate::events::{
 use crate::runtime::RuntimeConfig;
 
 mod control;
+mod negotiate;
+mod v2;
 use control::{ControlFinish, ControlWorkers};
+use negotiate::{Negotiated, Protocol};
 
 pub enum AcpEndpoint {
     Spawn(Vec<String>),
@@ -234,7 +237,13 @@ pub fn run_blocking(
     }
 }
 
-/// Spawn the agent, `initialize`, print the negotiated name, exit.
+/// Spawn the agent, ask it which protocol it speaks, print the negotiated
+/// name and version, exit.
+///
+/// This is a second `initialize` site, so it is a second place where a v1-only
+/// probe turns a working v2 agent into `-32602` or a hang. It runs the same
+/// union probe [`run`] does and reports what the peer actually said rather than
+/// what the config declared: `"<name> acp"` or `"<name> acp2"`.
 pub fn check_blocking(argv: Vec<String>) -> Result<String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -242,18 +251,15 @@ pub fn check_blocking(argv: Vec<String>) -> Result<String> {
         .context("acp runtime")?;
     runtime.block_on(async {
         let agent = AcpAgent::from_args(argv).map_err(acp_err)?;
-        Client
-            .builder()
-            .name(env!("CARGO_PKG_NAME"))
-            .connect_with(agent, |cx: ConnectionTo<Agent>| async move {
-                let init = cx.send_request(initialize_request()).block_task_deadline().await?;
-                Ok(init
-                    .agent_info
-                    .map(|info| info.name)
-                    .unwrap_or_else(|| "acp".into()))
-            })
-            .await
-            .map_err(acp_err)
+        let (channel, driver) =
+            <AcpAgent as ConnectTo<Client>>::into_channel_and_future(agent);
+        // Aborting the driver drops AcpAgent's child guard, which kills the
+        // process group: a check must not leave the agent it probed running.
+        let driver = tokio::spawn(driver);
+        let probed = negotiate::probe(channel, SETUP_DEADLINE).await;
+        driver.abort();
+        let (negotiated, _channel) = probed.map_err(acp_err)?;
+        Ok(negotiated.describe())
     })
 }
 
@@ -309,9 +315,78 @@ struct ParkedPrompt {
     kind: ParkedPromptKind,
 }
 
+/// What a turn cost. v1 and v2 `Usage` are field-identical, so one shape serves
+/// both stacks.
+struct TurnUsage {
+    input: u64,
+    output: u64,
+    cached: u64,
+    reasoning: u64,
+}
+
+/// One turn's outcome, in the words the UI already knows.
+///
+/// v1 reads it off `PromptResponse`. v2 cannot: its `PromptResponse` is an ACK
+/// carrying nothing but `_meta`, and the outcome arrives later as an idle
+/// `state_update`. Both stacks land here, so a turn ends the same way whichever
+/// protocol produced it and the stop-reason vocabulary cannot drift between them.
+enum TurnOutcome {
+    /// The agent said why it stopped. `kind` is the UI's word for the stop
+    /// reason; `usage` is what the turn cost, when the agent reports one.
+    Stopped {
+        kind: &'static str,
+        usage: Option<TurnUsage>,
+    },
+    /// The request never produced a turn.
+    Failed(AcpError),
+}
+
+impl TurnOutcome {
+    /// The agent answered, whatever it said.
+    fn stopped(&self) -> bool {
+        matches!(self, Self::Stopped { .. })
+    }
+
+    /// `session/cancel` reached the agent and it confirmed the interruption.
+    fn cancelled(&self) -> bool {
+        matches!(self, Self::Stopped { kind: "interrupted", .. })
+    }
+}
+
+/// v1's stop reason as the UI's word for it.
+fn v1_stop_kind(reason: agent_client_protocol::schema::v1::StopReason) -> &'static str {
+    use agent_client_protocol::schema::v1::StopReason as Reason;
+    match reason {
+        Reason::EndTurn => "completed",
+        Reason::MaxTokens => "max-tokens",
+        Reason::MaxTurnRequests => "max-turn-requests",
+        Reason::Refusal => "blocked",
+        Reason::Cancelled => "interrupted",
+        _ => "unknown",
+    }
+}
+
+impl From<Result<agent_client_protocol::schema::v1::PromptResponse, AcpError>> for TurnOutcome {
+    fn from(result: Result<agent_client_protocol::schema::v1::PromptResponse, AcpError>) -> Self {
+        match result {
+            Ok(response) => Self::Stopped {
+                kind: v1_stop_kind(response.stop_reason),
+                usage: response.usage.map(|usage| TurnUsage {
+                    input: usage.input_tokens,
+                    output: usage.output_tokens,
+                    cached: usage.cached_read_tokens.unwrap_or(0)
+                        + usage.cached_write_tokens.unwrap_or(0),
+                    reasoning: usage.thought_tokens.unwrap_or(0),
+                }),
+            },
+            Err(err) => Self::Failed(err),
+        }
+    }
+}
+
 struct PromptFinish {
     session_id: String,
-    result: Result<agent_client_protocol::schema::v1::PromptResponse, AcpError>,
+    result: TurnOutcome,
     payload: ParkedPromptKind,
     /// Turn generation: matches the `inflight` tag when this finish is the
     /// one that currently owns the session handle.
@@ -390,7 +465,7 @@ fn retarget_session(cmd: &mut Cmd, sid: &SessionId) {
 
 struct SteerFinish {
     message_id: u64,
-    result: Result<agent_client_protocol::schema::v1::PromptResponse, AcpError>,
+    result: TurnOutcome,
 }
 
 /// Backchat `AcpSession.#prompt`: abort does not wait for `session/prompt`.
@@ -433,7 +508,7 @@ fn spawn_session_prompt(
             .await;
         let _ = done.send(PromptFinish {
             session_id: sid.to_string(),
-            result,
+            result: TurnOutcome::from(result),
             payload,
             gen,
         });
@@ -455,7 +530,10 @@ fn spawn_steer_prompt(
             .send_request(PromptRequest::new(sid, content))
             .block_task()
             .await;
-        let _ = done.send(SteerFinish { message_id, result });
+        let _ = done.send(SteerFinish {
+            message_id,
+            result: TurnOutcome::from(result),
+        });
     });
 }
 
@@ -760,35 +838,24 @@ fn apply_prompt_finish(
     selected: Option<&AuthMethodInfo>,
 ) {
     match finish.result {
-        Ok(response) => {
-            let finish_kind = match response.stop_reason {
-                agent_client_protocol::schema::v1::StopReason::EndTurn => "completed",
-                agent_client_protocol::schema::v1::StopReason::MaxTokens => "max-tokens",
-                agent_client_protocol::schema::v1::StopReason::MaxTurnRequests => {
-                    "max-turn-requests"
-                }
-                agent_client_protocol::schema::v1::StopReason::Refusal => "blocked",
-                agent_client_protocol::schema::v1::StopReason::Cancelled => "interrupted",
-                _ => "unknown",
-            };
-            if let Some(usage) = response.usage {
+        TurnOutcome::Stopped { kind, usage } => {
+            if let Some(usage) = usage {
                 let _ = bus.send(AppEvent::Ui(crate::events::UiEvent::Usage {
                     session: finish.session_id.clone(),
-                    input: usage.input_tokens,
-                    output: usage.output_tokens,
-                    cached: usage.cached_read_tokens.unwrap_or(0)
-                        + usage.cached_write_tokens.unwrap_or(0),
-                    reasoning: usage.thought_tokens.unwrap_or(0),
+                    input: usage.input,
+                    output: usage.output,
+                    cached: usage.cached,
+                    reasoning: usage.reasoning,
                 }));
             }
             let _ = bus.send(AppEvent::Ui(crate::events::UiEvent::TurnEnd {
                 session: finish.session_id,
-                kind: finish_kind.into(),
+                kind: kind.into(),
             }));
             // A success proves the stall is over — the release happens in
             // the caller (it owns the session map); nothing parks here.
         }
-        Err(err) if is_auth_required_error(&err) => {
+        TurnOutcome::Failed(err) if is_auth_required_error(&err) => {
             // Park the payload with its owning session so the retry (after
             // `authenticate`) lands on the right tab. The turn itself is
             // over for the UI: settle the session's transcript and badge
@@ -811,7 +878,7 @@ fn apply_prompt_finish(
                 emit_needs_auth_open(bus, methods.to_vec(), selected, Some(acp_error_message(&err)));
             }
         }
-        Err(err) => {
+        TurnOutcome::Failed(err) => {
             let _ = bus.send(AppEvent::Ui(crate::events::UiEvent::TurnEnd {
                 session: finish.session_id.clone(),
                 kind: "error".into(),
@@ -1288,15 +1355,13 @@ async fn run(
     match endpoint {
         AcpEndpoint::Spawn(args) => {
             let agent = AcpAgent::from_args(args).map_err(acp_err)?;
-            connect(agent, cfg, bus, cmd_rx).await.map_err(acp_err)
+            negotiate_and_run(agent, cfg, bus, cmd_rx).await
         }
         #[cfg(unix)]
         AcpEndpoint::AttachStdio { incoming, outgoing } => {
             let incoming = unix_stream_from_file(incoming)?.compat();
             let outgoing = unix_stream_from_file(outgoing)?.compat_write();
-            connect(ByteStreams::new(outgoing, incoming), cfg, bus, cmd_rx)
-                .await
-                .map_err(acp_err)
+            negotiate_and_run(ByteStreams::new(outgoing, incoming), cfg, bus, cmd_rx).await
         }
         #[cfg(not(unix))]
         AcpEndpoint::AttachStdio { .. } => {
@@ -1308,15 +1373,49 @@ async fn run(
                 .context("tcp set_nonblocking")?;
             let stream = tokio::net::TcpStream::from_std(stream).context("tokio tcp from_std")?;
             let (read, write) = stream.into_split();
-            connect(
+            negotiate_and_run(
                 ByteStreams::new(write.compat_write(), read.compat()),
                 cfg,
                 bus,
                 cmd_rx,
             )
             .await
-            .map_err(acp_err)
         }
+    }
+}
+
+/// Ask the agent which protocol it speaks, then drive it with that client.
+///
+/// This is `crow-cli run`'s `_dispatch` in Rust. The probe IS the connection:
+/// the handshaked transport goes to whichever stack the answer selects instead
+/// of being spawned a second time by it. An agent that cannot be asked — dead,
+/// silent, or speaking a version this client does not — is an error carrying
+/// its own last words, not a hang. That is the failure a declared `protocol`
+/// turns into a silent one.
+async fn negotiate_and_run<T>(
+    transport: T,
+    cfg: RuntimeConfig,
+    bus: Sender<AppEvent>,
+    cmd_rx: Receiver<Cmd>,
+) -> Result<()>
+where
+    T: ConnectTo<Client> + 'static,
+{
+    let (channel, driver) = transport.into_channel_and_future();
+    // The transport owns the child process (or the socket) from here on, and
+    // driving it is what keeps stderr captured and the process group killed on
+    // exit — so it runs for the life of the connection, not just the probe.
+    tokio::spawn(driver);
+    let (negotiated, channel) = negotiate::probe(channel, SETUP_DEADLINE)
+        .await
+        .map_err(acp_err)?;
+    match negotiated.protocol {
+        Protocol::V1 => connect_with_init(channel, Some(negotiated), cfg, bus, cmd_rx)
+            .await
+            .map_err(acp_err),
+        Protocol::V2 => v2::connect(channel, negotiated, cfg, bus, cmd_rx)
+            .await
+            .map_err(acp_err),
     }
 }
 
@@ -1543,8 +1642,31 @@ fn client_projection_available(surface: &Arc<Mutex<Surface>>) -> bool {
     surface.client_compositor || surface.cordis
 }
 
+/// The v1 stack with no probe ahead of it: the connection handshakes itself.
+/// Production goes through [`negotiate_and_run`], which adopts a probe instead;
+/// this entry is what the unit tests drive a scripted agent through.
+#[cfg(test)]
 async fn connect<T>(
     transport: T,
+    cfg: RuntimeConfig,
+    bus: Sender<AppEvent>,
+    cmd_rx: Receiver<Cmd>,
+) -> std::result::Result<(), AcpError>
+where
+    T: ConnectTo<Client> + 'static,
+{
+    connect_with_init(transport, None, cfg, bus, cmd_rx).await
+}
+
+/// The v1 client stack.
+///
+/// `negotiated` is a probe that already handshaked on this very transport.
+/// Adopting its answer is the whole point of a probe that IS the connection:
+/// asking again would be a second round trip against a peer that has already
+/// answered one, and a v2 peer would answer it with an error.
+async fn connect_with_init<T>(
+    transport: T,
+    negotiated: Option<Negotiated>,
     cfg: RuntimeConfig,
     bus: Sender<AppEvent>,
     cmd_rx: Receiver<Cmd>,
@@ -2076,11 +2198,19 @@ where
             let surface = surface;
             let cfg = cfg;
             let _terms = terms;
+            let negotiated = negotiated;
             async move {
                 let _ = bus.send(AppEvent::Ctl(CtlEvent::Starting {
                     runtime: "acp".into(),
                 }));
-                let init = cx.send_request(initialize_request()).block_task_setup_deadline().await?;
+                let init = match negotiated {
+                    Some(negotiated) => negotiated.v1()?,
+                    None => {
+                        cx.send_request(initialize_request())
+                            .block_task_setup_deadline()
+                            .await?
+                    }
+                };
                 let agent_name = init
                     .agent_info
                     .as_ref()
@@ -2851,7 +2981,7 @@ where
                         }
                         steer = steer_done_rx.recv() => {
                             if let Some(SteerFinish { message_id, result }) = steer {
-                                let deferred = result.is_err();
+                                let deferred = !result.stopped();
                                 let _ = bus.send(AppEvent::Ctl(CtlEvent::SteerSettled {
                                     message_id,
                                     deferred,
@@ -2896,14 +3026,8 @@ where
                             // interruption surfaces as `Cancelled` (or an
                             // error); a turn that completed despite the
                             // cancel still reports its own result.
-                            let agent_cancelled = matches!(
-                                &done.result,
-                                Ok(response) if matches!(
-                                    response.stop_reason,
-                                    agent_client_protocol::schema::v1::StopReason::Cancelled
-                                )
-                            );
-                            if aborted && (done.result.is_err() || agent_cancelled) {
+                            let agent_cancelled = done.result.cancelled();
+                            if aborted && (!done.result.stopped() || agent_cancelled) {
                                 let _ = bus.send(AppEvent::Ui(
                                     crate::events::UiEvent::TurnEnd {
                                         session: key.clone(),
@@ -2914,7 +3038,7 @@ where
                                     session_id: key.clone(),
                                 }));
                             } else {
-                                let ok = matches!(done.result, Ok(_));
+                                let ok = done.result.stopped();
                                 apply_prompt_finish(
                                     done,
                                     &mut parked,

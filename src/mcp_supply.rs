@@ -96,6 +96,17 @@ pub fn wire_servers() -> Vec<WireMcpServer> {
     load().into_iter().map(McpServer::into_wire).collect()
 }
 
+/// The v2 spelling of the same supply.
+///
+/// v1 and v2 `McpServer` are field-identical — stdio is name/command/args/env,
+/// http and sse are name/url/headers — so the wire JSON is the wire JSON and
+/// the conversion is a re-read of it. A schema that stops being identical
+/// should fail here, loudly, rather than hand the agent a toolless session.
+pub fn wire_servers_v2() -> Vec<agent_client_protocol::schema::v2::McpServer> {
+    let value = serde_json::to_value(wire_servers()).expect("mcp supply serializes");
+    serde_json::from_value(value).expect("v2 McpServer matches the v1 wire shape")
+}
+
 fn load() -> Vec<McpServer> {
     let settings =
         crate::runtime::settings_path(&crate::runtime::default_session_root().to_string_lossy());

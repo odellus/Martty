@@ -15,20 +15,10 @@ use serde_json::{json, Value};
 
 /// The v2 `initialize` request this client sends: role-agnostic `info`
 /// (required) + `capabilities`, and no v1 `clientInfo`/`clientCapabilities`.
+/// One source of truth: the request the probe actually sends. A test-local copy
+/// would keep passing after the real one drifted.
 pub(crate) fn v2_initialize_request() -> v2::InitializeRequest {
-    v2::InitializeRequest::new(
-        ProtocolVersion::V2,
-        v2::Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
-    )
-    .capabilities(
-        v2::ClientCapabilities::new()
-            .auth(v2::AuthCapabilities::new().terminal(
-                v2::TerminalAuthCapabilities::new(),
-            ))
-            .elicitation(
-                v2::ElicitationCapabilities::new().form(v2::ElicitationFormCapabilities::new()),
-            ),
-    )
+    super::negotiate::v2_initialize_request()
 }
 
 #[test]

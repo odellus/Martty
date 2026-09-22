@@ -183,7 +183,7 @@ fn prompt_response_usage_reaches_the_ui() {
     .expect("standard ACP prompt response");
     let finish = PromptFinish {
         session_id: "s".into(),
-        result: Ok(response),
+        result: Ok(response).into(),
         payload: ParkedPromptKind::Text("hello".into()),
         gen: 1,
     };
@@ -221,7 +221,7 @@ fn prompt_error_ends_the_ui_turn_before_reporting_the_error() {
         result: Err(serde_json::from_value(json!({
             "code": -32603, "message": "boom",
             "data": { "marttyConnection": { "id": "h3", "authMethods": [] } }
-        })).unwrap()),
+        })).unwrap()).into(),
         payload: ParkedPromptKind::Text("hello".into()),
         gen: 1,
     };
@@ -4177,7 +4177,7 @@ fn structured_auth_failure_opens_owning_connection_and_parks_original_prompt() {
                     "authMethods": [{"id": "h3:login", "name": "Claude login"}]
                 }
             }
-        })).unwrap()),
+        })).unwrap()).into(),
         payload: ParkedPromptKind::Text("original request".into()), gen: 1,
     };
     let (tx, rx) = std::sync::mpsc::channel();

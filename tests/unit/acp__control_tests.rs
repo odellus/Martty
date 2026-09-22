@@ -294,8 +294,8 @@ async fn prompts_and_steers_outlive_the_control_request_deadline() {
                 "healthy steer timed out"
             );
             release.send(true).unwrap();
-            assert!(done_rx.recv().await.unwrap().result.is_ok());
-            assert!(steer_rx.recv().await.unwrap().result.is_ok());
+            assert!(done_rx.recv().await.unwrap().result.stopped());
+            assert!(steer_rx.recv().await.unwrap().result.stopped());
             task.await.unwrap();
             Ok(())
         })
