@@ -316,6 +316,7 @@ struct ParkedPrompt {
 
 /// What a turn cost. v1 and v2 `Usage` are field-identical, so one shape serves
 /// both stacks.
+#[derive(Debug, PartialEq, Eq)]
 struct TurnUsage {
     input: u64,
     output: u64,

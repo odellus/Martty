@@ -1300,3 +1300,498 @@ fn text_chunks_do_not_merge_across_subagents() {
     coalesce_session_updates(&mut events);
     assert_eq!(events.len(), 2, "chunks for distinct subagents stay separate");
 }
+
+
+// ---------------------------------------------------------------------------
+// ACP v2 `session/update` discriminators.
+//
+// Every payload below is a verbatim capture from `crow-cli acp2` driving a real
+// turn (`/tmp/wire-v2g.jsonl`) and a real `session/resume` replay
+// (`/tmp/wire-v2resume.jsonl`). v2 renamed and re-shaped enough of the union
+// that a v1-only parser silently rendered a resumed session as an empty pane.
+// ---------------------------------------------------------------------------
+
+/// One `session/update` notification, parsed.
+fn v2_update(session: &str, update: serde_json::Value) -> Vec<UiEvent> {
+    parse_notification("session/update", &json!({ "sessionId": session, "update": update }))
+}
+
+/// v2 replays a transcript as WHOLE messages whose `content` is an array of
+/// blocks, where a live turn streams chunks whose `content` is a single block
+/// object. `agent_message` has to land on `AssistantFinal`, not a delta: with
+/// no open cell it creates the finished one, and after chunks it supersedes the
+/// buffer instead of appending a second copy of the same sentence.
+#[test]
+fn v2_whole_message_updates_repaint_a_replayed_transcript() {
+    assert_eq!(
+        v2_update(
+            "premium-amethyst-anaconda-of-tenacity",
+            json!({
+                "sessionUpdate": "user_message",
+                "messageId": "6e284e5302224f3eb739b46a67d4802b",
+                "content": [{ "text": "write a 400 word essay about the sea", "type": "text" }],
+            })
+        ),
+        vec![UiEvent::UserMessage {
+            session: "premium-amethyst-anaconda-of-tenacity".into(),
+            text: "write a 400 word essay about the sea".into(),
+        }]
+    );
+
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "agent_thought",
+                "messageId": "619713175e474dd783039a0a012fabf9",
+                "content": [{ "text": "The user wants a 400-word essay.", "type": "text" }],
+            })
+        ),
+        vec![UiEvent::ReasoningDelta {
+            session: "s1".into(),
+            text: "The user wants a 400-word essay.".into(),
+        }]
+    );
+
+    let events = v2_update(
+        "s1",
+        json!({
+            "sessionUpdate": "agent_message",
+            "messageId": "58192eddf1204d629dcbe52501bc5f5d",
+            "content": [{ "text": "PONG", "type": "text" }],
+        })
+    );
+    assert_eq!(
+        events,
+        vec![UiEvent::AssistantFinal {
+            session: "s1".into(),
+            text: "PONG".into(),
+            model: None,
+        }],
+        "a whole message is one finished cell, never a delta"
+    );
+
+    // A message split across blocks is one run of text: `concat_text_blocks`
+    // joins with no separator (the blocks are fragments, not paragraphs), and a
+    // non-text block contributes nothing.
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "agent_message",
+                "content": [
+                    { "type": "text", "text": "PONG" },
+                    { "type": "image", "data": "AAAA", "mimeType": "image/png" },
+                    { "type": "text", "text": "!" },
+                ],
+            })
+        ),
+        vec![UiEvent::AssistantFinal {
+            session: "s1".into(),
+            text: "PONG!".into(),
+            model: None,
+        }]
+    );
+
+    // An empty message paints nothing: `AssistantFinal` with no text and no open
+    // cell would push a blank bubble into the transcript.
+    assert_eq!(
+        v2_update("s1", json!({ "sessionUpdate": "agent_message", "content": [] })),
+        Vec::<UiEvent>::new()
+    );
+}
+
+/// The turn does not end when `session/prompt` returns: v2's `PromptResponse`
+/// is `{}`, and the idle `state_update` is the only end-of-turn signal. The
+/// `acp::v2` stack settles its turn board off that notification before this
+/// parser sees it, so parsing it into `SessionStatus`/`TurnEnd` as well would
+/// report every turn twice — and agent2 re-emits idle every thirty seconds as
+/// a heartbeat for a parked session, which would read as a turn ending.
+#[test]
+fn v2_state_update_belongs_to_the_stack_not_the_parser() {
+    for update in [
+        json!({ "sessionUpdate": "state_update", "state": "running" }),
+        json!({ "sessionUpdate": "state_update", "state": "idle" }),
+        json!({
+            "sessionUpdate": "state_update",
+            "state": "idle",
+            "stopReason": "end_turn",
+            "usage": { "totalTokens": 7661, "inputTokens": 7632, "outputTokens": 29 },
+        }),
+        json!({ "sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled" }),
+        // The provider-failure path: v2's prompt response cannot carry
+        // `stopReason: "error"`, so agent2 puts it on the idle instead.
+        json!({ "sessionUpdate": "state_update", "state": "idle", "stopReason": "error" }),
+    ] {
+        assert_eq!(
+            v2_update("s1", update.clone()),
+            Vec::<UiEvent>::new(),
+            "state_update {update} must not reach the transcript"
+        );
+    }
+}
+
+/// Terminal bytes have two audiences and only one of them is the transcript.
+/// `terminal_output_chunk` is base64 PTY output for a human watching a
+/// terminal pane; the model's copy of the same run arrives as
+/// `tool_call_update.raw_output`. crow-term has no terminal pane, so painting
+/// the PTY stream would be showing one thing twice.
+#[test]
+fn v2_terminal_updates_are_claimed_but_not_painted() {
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "terminal_update",
+                "terminalId": "term_79d4d32778c74087b3522bc369dcad67/call_4d5f7d16aa7643d8a7f2bac0",
+                "command": "print(\"ok\")",
+                "cwd": "/tmp/v2smoke",
+            })
+        ),
+        Vec::<UiEvent>::new()
+    );
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "terminal_output_chunk",
+                "terminalId": "term_1",
+                "data": "b2sK",
+            })
+        ),
+        Vec::<UiEvent>::new()
+    );
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "tool_call_content_chunk",
+                "toolCallId": "call_1",
+                "content": { "type": "content", "content": { "type": "text", "text": "ok" } },
+            })
+        ),
+        Vec::<UiEvent>::new()
+    );
+}
+
+/// A v2 agent sent no `tool_call` at all in the live capture: the first thing
+/// it said about the call was a `tool_call_update` carrying `title`, `kind` and
+/// `rawInput`. Updates are patches, so an update for an id nobody announced has
+/// to CREATE the call or the tool cell never opens. The completion is a second
+/// patch whose `rawOutput` is an object, not a string.
+#[test]
+fn a_v2_tool_call_arrives_as_its_own_first_update() {
+    let call_id = "79d4d32778c74087b3522bc369dcad67/call_4d5f7d16aa7643d8a7f2bac0";
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": call_id,
+                "title": "execute",
+                "kind": "execute",
+                "status": "in_progress",
+                "rawInput": { "code": "print(\"ok\")" },
+            })
+        ),
+        vec![UiEvent::ToolCall {
+            session: "s1".into(),
+            call_id: call_id.into(),
+            name: "execute".into(),
+            arguments: r#"{"code":"print(\"ok\")"}"#.into(),
+        }],
+        "no preceding tool_call: the in_progress patch opens the cell"
+    );
+
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": call_id,
+                "status": "completed",
+                "content": [{ "terminalId": format!("term_{call_id}"), "type": "terminal" }],
+                "rawOutput": { "output": "ok", "exit_code": null },
+            })
+        ),
+        vec![UiEvent::ToolResult {
+            session: "s1".into(),
+            call_id: call_id.into(),
+            is_error: false,
+            text: "ok".into(),
+            error: None,
+        }],
+        "the terminal content block is not text; rawOutput.output is"
+    );
+
+    // A patch that repeats nothing but the status must not invent a second cell.
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({ "sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "in_progress" })
+        ),
+        Vec::<UiEvent>::new()
+    );
+}
+
+/// `usage_update` is the only token signal crow-cli's v2 agent sends mid-turn,
+/// and it reports context pressure as `used`/`size` rather than a breakdown.
+#[test]
+fn v2_usage_update_fills_the_context_meter() {
+    assert_eq!(
+        v2_update("s1", json!({ "sessionUpdate": "usage_update", "used": 7615, "size": 180000 })),
+        vec![UiEvent::ContextUsage {
+            session: "s1".into(),
+            used: 7615,
+            size: 180000,
+        }]
+    );
+}
+
+/// The live v2 turn: a chunk stream whose `content` is a single block object,
+/// not an array. This is the shape that has to keep working alongside the
+/// whole-message variants above.
+#[test]
+fn v2_live_chunks_carry_a_single_content_block() {
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "agent_message_chunk",
+                "messageId": "58192eddf1204d629dcbe52501bc5f5d",
+                "content": { "text": "PONG", "type": "text" },
+            })
+        ),
+        vec![UiEvent::TextDelta {
+            session: "s1".into(),
+            text: "PONG".into(),
+        }]
+    );
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "agent_thought_chunk",
+                "messageId": "9619c3e162414ecb844f72f6a7acd8d1",
+                "content": { "text": " user wants", "type": "text" },
+            })
+        ),
+        vec![UiEvent::ReasoningDelta {
+            session: "s1".into(),
+            text: " user wants".into(),
+        }]
+    );
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "session_info_update",
+                "title": "reply with exactly: PONG",
+            })
+        ),
+        vec![UiEvent::SessionTitle {
+            session: "s1".into(),
+            title: "reply with exactly: PONG".into(),
+        }]
+    );
+}
+
+
+// ---------------------------------------------------------------------------
+// v2 renamed the config-option key: `id` became `configId`. One reader
+// (`config_id_of`) now serves both spellings, so both have to stay pinned —
+// the v2 rename is what left the model catalog, the composition picker and the
+// effort selector empty on a live v2 connection.
+// ---------------------------------------------------------------------------
+
+/// The verbatim `configOptions` from a real `crow-cli acp2` `session/new`.
+fn v2_config_options() -> serde_json::Value {
+    json!([{
+        "configId": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "bonsai:bonsai-2",
+        "options": [
+            { "value": "bonsai:bonsai-2", "name": "bonsai-2", "description": "bonsai-2" },
+            { "value": "alibaba:qwen3.8-max", "name": "qwen3.8-max", "description": "qwen3.8-max" },
+        ],
+    }])
+}
+
+#[test]
+fn config_id_of_reads_the_v2_key_first_and_falls_back_to_v1() {
+    assert_eq!(config_id_of(&json!({ "configId": "model" })), Some("model"));
+    assert_eq!(config_id_of(&json!({ "config_id": "model" })), Some("model"));
+    assert_eq!(config_id_of(&json!({ "id": "model" })), Some("model"));
+    assert_eq!(config_id_of(&json!({ "name": "Model" })), None);
+    // A v2 option that also carries a stray `id` keeps its `configId`.
+    assert_eq!(
+        config_id_of(&json!({ "configId": "model", "id": "something-else" })),
+        Some("model")
+    );
+}
+
+#[test]
+fn v2_config_options_still_feed_the_catalog_and_the_model_line() {
+    let options = v2_config_options();
+
+    assert_eq!(
+        config_option_events("s1".into(), &options),
+        vec![UiEvent::SessionModel {
+            session: "s1".into(),
+            model: "bonsai:bonsai-2".into(),
+        }],
+        "a v2 snapshot has to name the current model"
+    );
+
+    let (models, presets, composition_id) = catalog_from_config_options(&options);
+    assert_eq!(
+        models
+            .iter()
+            .map(|m| (m.provider.as_str(), m.id.as_str(), m.name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("", "bonsai:bonsai-2", "bonsai-2"),
+            ("", "alibaba:qwen3.8-max", "qwen3.8-max"),
+        ],
+        "colon-form ids carry their provider inside the id"
+    );
+    // `category: "model"` is what keeps the model select out of the composition
+    // picker; without it every v2 agent would offer its models as presets.
+    assert!(presets.is_empty(), "the model select is not a composition");
+    assert_eq!(composition_id, None);
+}
+
+#[test]
+fn the_v1_config_option_spelling_still_works_through_the_same_reader() {
+    let options = json!([
+        {
+            "id": "model",
+            "name": "Model",
+            "type": "select",
+            "currentValue": "gpt-5",
+            "options": [{ "value": "gpt-5", "name": "GPT-5", "description": "gpt-5" }],
+        },
+        {
+            "id": "agent",
+            "name": "Agent",
+            "type": "select",
+            "currentValue": "code",
+            "options": [
+                { "value": "code", "name": "Code", "description": "code agent" },
+                { "value": "chat", "name": "Chat", "description": "Broken: no model" },
+            ],
+        },
+        {
+            "id": "effort",
+            "name": "Effort",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": "high",
+            "options": [{ "value": "high", "name": "High", "description": "high" }],
+        },
+    ]);
+
+    assert_eq!(
+        config_option_events("s1".into(), &options),
+        vec![
+            UiEvent::SessionModel {
+                session: "s1".into(),
+                model: "gpt-5".into()
+            },
+            UiEvent::AgentPreset {
+                session: "s1".into(),
+                preset: "code".into()
+            },
+            UiEvent::ReasoningEffort {
+                session: "s1".into(),
+                effort: "high".into()
+            },
+        ]
+    );
+
+    let (models, presets, composition_id) = catalog_from_config_options(&options);
+    assert_eq!(models.len(), 1);
+    assert_eq!(composition_id.as_deref(), Some("agent"));
+    assert_eq!(
+        presets
+            .iter()
+            .map(|p| (p.id.as_str(), p.broken))
+            .collect::<Vec<_>>(),
+        vec![("code", false), ("chat", true)]
+    );
+    assert_eq!(
+        reasoning_effort_option(&options).and_then(config_id_of),
+        Some("effort")
+    );
+}
+
+/// v2 spells the same snapshot with `configId` everywhere; the composition and
+/// effort picks have to survive the rename too, not just the model one.
+#[test]
+fn v2_config_options_name_the_composition_and_the_effort() {
+    let options = json!([
+        {
+            "configId": "agent",
+            "name": "Agent",
+            "type": "select",
+            "currentValue": "code",
+            "options": [{ "value": "code", "name": "Code", "description": "code agent" }],
+        },
+        {
+            "configId": "effort",
+            "name": "Effort",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": "low",
+            "options": [{ "value": "low", "name": "Low", "description": "low" }],
+        },
+    ]);
+    assert_eq!(
+        config_option_events("s1".into(), &options),
+        vec![
+            UiEvent::AgentPreset {
+                session: "s1".into(),
+                preset: "code".into()
+            },
+            UiEvent::ReasoningEffort {
+                session: "s1".into(),
+                effort: "low".into()
+            },
+        ]
+    );
+    assert_eq!(
+        composition_option(&options).and_then(config_id_of),
+        Some("agent")
+    );
+    let (_, _, composition_id) = catalog_from_config_options(&options);
+    assert_eq!(composition_id.as_deref(), Some("agent"));
+}
+
+/// A `config_option_update` notification is the mid-session spelling of the
+/// same snapshot, and it is what a v2 agent sends after
+/// `session/set_config_option`.
+#[test]
+fn v2_config_option_update_notification_reports_the_new_model() {
+    assert_eq!(
+        v2_update(
+            "s1",
+            json!({
+                "sessionUpdate": "config_option_update",
+                "configOptions": [{
+                    "configId": "model",
+                    "name": "Model",
+                    "category": "model",
+                    "type": "select",
+                    "currentValue": "alibaba:qwen3.8-max",
+                    "options": [],
+                }],
+            })
+        ),
+        vec![UiEvent::SessionModel {
+            session: "s1".into(),
+            model: "alibaba:qwen3.8-max".into(),
+        }]
+    );
+}
