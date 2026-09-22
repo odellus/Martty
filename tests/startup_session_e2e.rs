@@ -647,3 +647,43 @@ fn a_v2_resume_repaints_the_transcript_the_agent_replays() {
     );
     pane.assert_alive();
 }
+
+#[test]
+fn a_v2_permission_ask_reaches_the_user_and_the_answer_reaches_the_agent() {
+    let stub = [
+        ("STUB_PROTOCOL", "2"),
+        ("STUB_CAPS", "both"),
+        ("STUB_ASK_PERMISSION", "1"),
+    ];
+    let Some(mut pane) = launch_with("v2-perm", &[], &stub, Some(SUPPLY)) else {
+        return;
+    };
+    pane.expect(&["stub-default"]);
+    pane.send("run the script\r");
+    // v2 moved the copy the user reads to a required top-level `title` and put
+    // the call it describes in `subject`. A client still reading the title off
+    // the tool call, as v1 does, draws a box with nothing in it.
+    pane.expect(&[
+        "approval",
+        "Run this script?",
+        "Allow once",
+        "allow_once",
+        "Reject once",
+        "reject_once",
+    ]);
+    // Enter takes the highlighted option, which is the first `allow_once`.
+    pane.send("\r");
+    pane.expect(&["permission answer: allow"]);
+
+    // The agent got a real v2 outcome and not an empty object. `outcome` is
+    // tagged twice: once as the response's only field, once as the variant.
+    let reply = pane
+        .wire()
+        .into_iter()
+        .find(|entry| entry["msg"]["id"].as_str() == Some("perm-1"))
+        .expect("the agent's permission request was answered");
+    let answer = &reply["msg"]["result"]["outcome"];
+    assert_eq!(answer["outcome"], "selected");
+    assert_eq!(answer["optionId"], "allow");
+    pane.assert_alive();
+}

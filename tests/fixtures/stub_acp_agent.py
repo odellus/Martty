@@ -17,6 +17,11 @@ its behavior from the environment:
                     which is what a cancel test needs: an agent that answers in
                     the same breath is already idle before the client can
                     interrupt it.
+  STUB_ASK_PERMISSION=1
+                    a v2 prompt asks `session/request_permission` and holds the
+                    turn until the client answers. The reply is printed, so a
+                    test can read the user's decision off the pane as well as
+                    off the wire.
 """
 import json
 import os
@@ -29,7 +34,14 @@ HAS_LOAD = CAPS in ("load", "both")
 HAS_RESUME = CAPS in ("resume", "both")
 REFUSE = os.environ.get("STUB_LOAD_FAIL") == "1"
 HOLD = os.environ.get("STUB_HOLD") == "1"
+ASK_PERMISSION = os.environ.get("STUB_ASK_PERMISSION") == "1"
 V2 = os.environ.get("STUB_PROTOCOL", "1") == "2"
+
+# The request id of the permission ask in flight, and the session holding it.
+# A stub that answered its own permission request would only ever test the
+# client's ability to talk to itself.
+PERMISSION_RID = "perm-1"
+AWAITING_PERMISSION = {}
 
 log = open(LOG, "a", buffering=1)
 MODES = {
@@ -163,6 +175,33 @@ def replay_v2(sid):
     }})
 
 
+def ask_permission(sid):
+    """A v2 `session/request_permission`, in the shape the spec requires.
+
+    The copy the user reads is the top-level `title`; v1 put it on the tool
+    call, and a client still reading it there draws an empty box. The call it
+    describes rides in `subject`. The turn then waits for the answer, because
+    that is what an agent does.
+    """
+    AWAITING_PERMISSION[PERMISSION_RID] = sid
+    state(sid, "running")
+    send({"jsonrpc": "2.0", "id": PERMISSION_RID,
+          "method": "session/request_permission",
+          "params": {
+              "sessionId": sid,
+              "title": "Run this script?",
+              "description": "wants to execute scripts/setup.sh",
+              "subject": {"type": "command", "command": "cargo test",
+                          "cwd": "/workspace"},
+              "options": [
+                  {"optionId": "allow", "name": "Allow once",
+                   "kind": "allow_once"},
+                  {"optionId": "deny", "name": "Reject once",
+                   "kind": "reject_once"},
+              ],
+          }})
+
+
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -174,6 +213,16 @@ for line in sys.stdin:
     note(msg)
     method = msg.get("method")
     if method is None:
+        # A response to the one request the stub makes. The turn it was holding
+        # completes here, saying which option the user actually picked.
+        sid = AWAITING_PERMISSION.pop(msg.get("id"), None)
+        if sid is not None:
+            outcome = (msg.get("result") or {}).get("outcome") or {}
+            picked = outcome.get("optionId") or outcome.get("outcome") or "none"
+            update(sid, "agent_message_chunk", messageId="m3",
+                   content={"type": "text",
+                            "text": "permission answer: " + str(picked)})
+            state(sid, "idle", stopReason="end_turn")
         continue
     rid = msg.get("id")
     params = msg.get("params") or {}
@@ -289,6 +338,9 @@ for line in sys.stdin:
             # The acknowledgement goes out first, exactly as the real agent
             # does. Everything the turn actually produced follows it.
             send({"jsonrpc": "2.0", "id": rid, "result": {}})
+            if ASK_PERMISSION:
+                ask_permission(sid)
+                continue
             if HOLD:
                 state(sid, "running")
                 continue
