@@ -573,6 +573,16 @@ fn a_v2_prompt_reaches_the_pane_once() {
         "the prompt is drawn once:\n{}",
         pane.squeezed()
     );
+    // Submitting moves the queue and agent fingerprints, so this turn also sent
+    // the Client-chrome snapshots. They belong to neither protocol, and a v2
+    // stack that let them fall through to its catch-all did two damages at
+    // once: an error row per snapshot, and `CtlEvent::Error` forcing the pane
+    // to Idle underneath a turn that was still running.
+    assert!(
+        !screen.contains("is not supported on a v2 connection"),
+        "a version-neutral command reached the v2 catch-all:\n{}",
+        pane.squeezed()
+    );
     pane.assert_alive();
 }
 
