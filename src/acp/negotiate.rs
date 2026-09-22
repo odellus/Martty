@@ -65,6 +65,7 @@ impl Protocol {
 }
 
 /// What the peer said it speaks, plus the raw `initialize` result.
+#[derive(Debug)]
 pub(crate) struct Negotiated {
     pub(crate) protocol: Protocol,
     /// v1 and v2 responses are different shapes — `agentInfo`/`agentCapabilities`
@@ -90,6 +91,7 @@ impl Negotiated {
 
     /// The `initialize` result as the v1 stack reads it.
     pub(crate) fn v1(&self) -> Result<V1InitializeResponse, AcpError> {
+        self.expect(Protocol::V1)?;
         serde_json::from_value(self.init.clone()).map_err(|error| {
             AcpError::new(
                 -32602,
@@ -100,12 +102,34 @@ impl Negotiated {
 
     /// The `initialize` result as the v2 stack reads it.
     pub(crate) fn v2(&self) -> Result<V2InitializeResponse, AcpError> {
+        self.expect(Protocol::V2)?;
         serde_json::from_value(self.init.clone()).map_err(|error| {
             AcpError::new(
                 -32602,
                 format!("agent initialize response is not v2: {error}"),
             )
         })
+    }
+
+    /// Refuse to read an answer as the version it was not given in.
+    ///
+    /// The shape alone cannot catch this: every field of v1's
+    /// `InitializeResponse` defaults, so a v2 answer deserializes cleanly as a
+    /// v1 one and the wrong stack gets a plausible empty response instead of an
+    /// error. That is the silent half of the failure negotiation exists to
+    /// prevent, so it is checked at the only place the two shapes meet.
+    fn expect(&self, protocol: Protocol) -> Result<(), AcpError> {
+        if self.protocol == protocol {
+            return Ok(());
+        }
+        Err(AcpError::new(
+            -32602,
+            format!(
+                "agent negotiated {} but was read as {}",
+                self.protocol.tag(),
+                protocol.tag()
+            ),
+        ))
     }
 }
 
@@ -323,3 +347,7 @@ fn classify(init: Value) -> Result<Negotiated, AcpError> {
         )),
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/unit/acp__negotiate_tests.rs"]
+mod tests;
