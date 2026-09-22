@@ -639,6 +639,11 @@ fn controller_loop(
             Cmd::QueueSnapshot { .. } | Cmd::AgentsSnapshot { .. } | Cmd::ActiveSession { .. } => {
                 // The legacy/demo controller has no local Cordis compositor.
             }
+            Cmd::SwitchHarness { .. } => {
+                // The legacy/demo controller owns no agent endpoint: there is
+                // nothing to respawn and no harness to switch to.
+                crate::acp::refuse_harness_switch(&bus);
+            }
             Cmd::Shutdown => {
                 let mut guard = runtime.lock().unwrap();
                 if let Some(rt) = guard.take() {

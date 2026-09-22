@@ -502,6 +502,19 @@ pub enum Cmd {
     ForgetSession {
         session_id: String,
     },
+    /// `/harness`: replace the live agent connection with a different
+    /// configured recipe. Carries the RESOLVED argv because the painter owns
+    /// `settings.json` and has already persisted `defaultHarness` by the time
+    /// this arrives — the controller never reads settings, it just respawns.
+    ///
+    /// Intercepted by the relay in [`crate::acp::run_blocking`], which is the
+    /// only thing that owns the endpoint and can therefore build a new one; it
+    /// never reaches a command loop. Sessions belong to the agent that made
+    /// them, so the respawn starts fresh and the viewed tab rebinds. The
+    /// painter keeps the id and the label — the controller only needs the argv.
+    SwitchHarness {
+        argv: Vec<String>,
+    },
     Shutdown,
 }
 

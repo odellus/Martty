@@ -14,6 +14,13 @@ All notable changes to this project are documented here. The project follows
 
 ### Added
 
+- `/harness` in the painter itself, for running the binary without the Node host:
+  pick a configured Harness and the live connection is replaced with it — the
+  agent is respawned, the protocol is renegotiated from scratch, and the choice
+  is saved as the default. `/harness <id>` switches directly; with no argument a
+  picker opens on the active recipe and shows each one’s command. Switching
+  drops the sessions belonging to the agent being replaced, so their transcripts
+  stay readable and the viewed tab rebinds to the new connection.
 - Show the current tab’s Harness icon before the model, using Registry assets cached locally; fall back to its name while unavailable or on terminals without image support.
 
 - A Chinese and English workflow article on trying Codex and Claude Code in one

@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -212,6 +212,10 @@ impl Surface {
 }
 
 /// Run the ACP client until shutdown. Blocks the caller (controller thread).
+///
+/// One tokio runtime serves every connection generation: a `/harness` switch
+/// tears the stack down and builds another on a new endpoint without the
+/// painter ever learning that the thread behind `Controller::send` was replaced.
 pub fn run_blocking(
     cfg: RuntimeConfig,
     endpoint: AcpEndpoint,
@@ -230,9 +234,74 @@ pub fn run_blocking(
             return;
         }
     };
-    if let Err(err) = runtime.block_on(run(cfg, endpoint, bus.clone(), cmd_rx)) {
-        // The painter retains the latest initialized identity, not cfg.bin from a previous Harness.
-        let _ = bus.send(AppEvent::Ctl(CtlEvent::ConnectionFailed { target: String::new(), error: format!("{err:#}") }));
+    let mut endpoint = endpoint;
+    let mut cmd_rx = cmd_rx;
+    loop {
+        // One relay per generation. It owns the painter's receiver and forwards
+        // into the channel this generation's stack reads, which is what makes a
+        // `SwitchHarness` interceptable by the only code holding both the
+        // receiver and an endpoint to replace.
+        let (relay_tx, relay_rx) = mpsc::channel::<Cmd>();
+        let (switch_tx, switch_rx) = mpsc::channel::<(Receiver<Cmd>, AcpEndpoint)>();
+        let relay = std::thread::Builder::new()
+            .name("dsh-acp-relay".into())
+            .spawn({
+                let bus = bus.clone();
+                move || relay_commands(cmd_rx, relay_tx, switch_tx, &bus)
+            });
+        if let Err(err) = relay {
+            let _ = bus.send(AppEvent::Ctl(CtlEvent::Error(format!("acp relay: {err}"))));
+            return;
+        }
+        if let Err(err) = runtime.block_on(run(cfg.clone(), endpoint, bus.clone(), relay_rx)) {
+            // The painter retains the latest initialized identity, not cfg.bin from a previous Harness.
+            let _ = bus.send(AppEvent::Ctl(CtlEvent::ConnectionFailed { target: String::new(), error: format!("{err:#}") }));
+            return;
+        }
+        // The stack unwound. Either the relay handed the receiver back with a
+        // fresh endpoint, or it exited and took `switch_tx` with it — so this
+        // distinguishes a harness switch from a shutdown without blocking.
+        match switch_rx.recv() {
+            Ok((receiver, next)) => {
+                cmd_rx = receiver;
+                endpoint = next;
+            }
+            Err(_) => return,
+        }
+    }
+}
+
+/// Forward painter commands into one connection generation, intercepting
+/// [`Cmd::SwitchHarness`].
+///
+/// Dropping `relay_tx` is the teardown: the stack's own forwarder sees the
+/// channel close, its command loop's `recv()` yields nothing, and the loop
+/// breaks exactly the way `Cmd::Shutdown` breaks it — dropping the client, and
+/// with it the agent's child guard, which kills the process group. The painter's
+/// receiver goes back through `switch_tx` BEFORE that, because it is the one
+/// thing the next generation cannot rebuild.
+fn relay_commands(
+    cmd_rx: Receiver<Cmd>,
+    relay_tx: Sender<Cmd>,
+    switch_tx: Sender<(Receiver<Cmd>, AcpEndpoint)>,
+    bus: &Sender<AppEvent>,
+) {
+    let mut held = Some(cmd_rx);
+    while let Some(cmd_rx) = held.as_ref() {
+        let Ok(cmd) = cmd_rx.recv() else { return };
+        if let Cmd::SwitchHarness { argv } = cmd {
+            // `runtime: "harness"` is the painter's cue that a switch, not a
+            // cold start, owns the terminal from here.
+            let _ = bus.send(AppEvent::Ctl(CtlEvent::Starting {
+                runtime: "harness".into(),
+            }));
+            let Some(cmd_rx) = held.take() else { return };
+            let _ = switch_tx.send((cmd_rx, AcpEndpoint::Spawn(argv)));
+            return;
+        }
+        if relay_tx.send(cmd).is_err() {
+            return;
+        }
     }
 }
 
@@ -264,6 +333,18 @@ pub fn check_blocking(argv: Vec<String>) -> Result<String> {
 
 fn acp_err(err: AcpError) -> anyhow::Error {
     anyhow::anyhow!("{err}")
+}
+
+/// `Cmd::SwitchHarness` belongs to [`run_blocking`]'s relay — the only holder of
+/// both the painter's receiver and the endpoint being replaced — so it cannot
+/// reach a command loop. Every loop arms it anyway: a future caller that wires
+/// `cmd_rx` straight into a stack should fail loudly here rather than fall
+/// through to a version-specific catch-all and report a protocol gap that does
+/// not exist.
+pub(crate) fn refuse_harness_switch(bus: &Sender<AppEvent>) {
+    let _ = bus.send(AppEvent::Ctl(CtlEvent::Error(
+        "this connection cannot switch harness — the controller does not own its endpoint".into(),
+    )));
 }
 
 pub(crate) fn initialize_request() -> InitializeRequest {
@@ -1409,18 +1490,29 @@ where
     // The transport owns the child process (or the socket) from here on, and
     // driving it is what keeps stderr captured and the process group killed on
     // exit — so it runs for the life of the connection, not just the probe.
-    tokio::spawn(driver);
-    let (negotiated, channel) = negotiate::probe(channel, SETUP_DEADLINE)
-        .await
-        .map_err(acp_err)?;
-    match negotiated.protocol {
-        Protocol::V1 => connect_with_init(channel, Some(negotiated), cfg, bus, cmd_rx)
+    let driver = tokio::spawn(driver);
+    let outcome = async {
+        let (negotiated, channel) = negotiate::probe(channel, SETUP_DEADLINE)
             .await
-            .map_err(acp_err),
-        Protocol::V2 => v2::connect(channel, negotiated, cfg, bus, cmd_rx)
-            .await
-            .map_err(acp_err),
+            .map_err(acp_err)?;
+        match negotiated.protocol {
+            Protocol::V1 => connect_with_init(channel, Some(negotiated), cfg, bus, cmd_rx)
+                .await
+                .map_err(acp_err),
+            Protocol::V2 => v2::connect(channel, negotiated, cfg, bus, cmd_rx)
+                .await
+                .map_err(acp_err),
+        }
     }
+    .await;
+    // The connection is over on every path out of that block, including a probe
+    // that never got an answer. `run_blocking` keeps ONE runtime for every
+    // generation, so a detached driver would outlive its connection holding the
+    // transport — and the transport holds the child guard: one leaked agent
+    // process per `/harness`. Aborting drops the guard, which kills the process
+    // group, the same way `check_blocking` cleans up after its probe.
+    driver.abort();
+    outcome
 }
 
 fn dynamic_plugins_from_value(value: &Value) -> std::result::Result<Vec<CordisPluginItem>, String> {
@@ -2817,6 +2909,7 @@ where
                             }
                         }
                         Cmd::Shutdown => break,
+                        Cmd::SwitchHarness { .. } => refuse_harness_switch(&bus),
                         control => {
                             let mut control = control;
                             let target = match &mut control {
@@ -3109,3 +3202,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/unit/acp__v2_wire_tests.rs"]
 mod v2_wire_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/acp__harness_relay_tests.rs"]
+mod harness_relay_tests;

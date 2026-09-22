@@ -79,6 +79,7 @@ impl Locale {
             "plan" => "切换 Host 计划模式",
             "image" => "发送本地图片（png/jpeg/webp/gif）",
             "clip" => "附加剪贴板图片（macOS/Linux）",
+            "harness" => "切换 Agent Harness —— 重启连接并开启新会话",
             "theme" => "切换明暗模式或主题包",
             "ui" => "切换 UI 插件",
             "vim" => "切换 vim 模式编辑（默认关闭）",

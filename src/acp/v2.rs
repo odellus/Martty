@@ -1346,6 +1346,7 @@ pub(super) async fn connect(
                                     }
                                 }
                                 Cmd::Shutdown => break,
+                                Cmd::SwitchHarness { .. } => super::refuse_harness_switch(&bus),
                                 other => {
                                     let _ = bus.send(AppEvent::Ctl(CtlEvent::Error(format!(
                                         "acp2: {:?} is not supported on a v2 connection", other))));

@@ -41,6 +41,21 @@ impl Harness {
     }
 }
 
+/// A configured harness plus the identity `settings.json` knows it by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessEntry {
+    pub id: String,
+    pub label: String,
+    pub harness: Harness,
+}
+
+impl HarnessEntry {
+    /// The spawn argv, space-joined the way the npm host displays a recipe.
+    pub fn command_text(&self) -> String {
+        self.harness.argv().join(" ")
+    }
+}
+
 /// The harness `defaultHarness` selects, or `None` when settings are absent,
 /// unreadable, or name no configured harness. Malformed entries are skipped
 /// rather than fatal: this is a fallback path, and the caller still has `dsh-acp`.
@@ -54,6 +69,60 @@ pub fn selected(path: &Path) -> Option<Harness> {
         .iter()
         .find(|entry| entry.get("id").and_then(|v| v.as_str()) == Some(id))?;
     harness(entry)
+}
+
+/// Every harness the settings file offers, in file order.
+///
+/// This feeds the in-TUI picker, so it follows [`selected`]'s rule that a
+/// malformed entry is skipped rather than fatal — a picker that refuses to open
+/// because one unrelated recipe is broken is worse than one that omits it. An
+/// entry with no usable `id` is not offered either: `defaultHarness` could never
+/// name it, so picking it would switch the connection without persisting.
+pub fn all(path: &Path) -> Vec<HarnessEntry> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(settings) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    entries(&settings)
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(|v| v.as_str())?.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let recipe = harness(entry)?;
+            let label = entry
+                .get("label")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|label| !label.is_empty())
+                .unwrap_or(id);
+            Some(HarnessEntry {
+                id: id.to_owned(),
+                label: label.to_owned(),
+                harness: recipe,
+            })
+        })
+        .collect()
+}
+
+/// The id `defaultHarness` selects right now, so the picker can mark it.
+/// Unlike [`selected`] this does not require the entry to be spawnable: the
+/// active row is a fact about the file, not about the recipe.
+pub fn current_id(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let settings: serde_json::Value = serde_json::from_str(&text).ok()?;
+    default_id(&settings).map(str::to_owned)
+}
+
+fn entries(settings: &serde_json::Value) -> &[serde_json::Value] {
+    settings
+        .get("harnesses")
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 /// `persistedDefaultId`: `defaultHarness` when it is a string, the legacy
@@ -214,5 +283,75 @@ mod tests {
             selected(&path).unwrap().args,
             vec!["-p".to_owned(), "@x/agent".to_owned(), "acp".to_owned()]
         );
+    }
+
+    /// The two-entry shape a v2 install actually has: same command, different
+    /// argv, and no `protocol` key anywhere — the version is negotiated.
+    const DUAL: &str = r#"{"harnesses":[
+        {"id":"crow-cli","label":"crow-cli","command":"/bin/crow-cli","args":["acp"],"env":{}},
+        {"id":"crow-cli-v2","label":"crow-cli (ACP v2)","command":"/bin/crow-cli","args":["acp2"],"env":{}}
+    ],"defaultHarness":"crow-cli","theme":"iceberg"}"#;
+
+    #[test]
+    fn all_offers_every_entry_in_file_order_with_its_recipe() {
+        let path = tmp("all.json");
+        std::fs::write(&path, DUAL).unwrap();
+        let all = all(&path);
+        assert_eq!(
+            all.iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["crow-cli", "crow-cli-v2"]
+        );
+        assert_eq!(all[1].label, "crow-cli (ACP v2)");
+        assert_eq!(all[1].command_text(), "/bin/crow-cli acp2");
+        assert_eq!(all[0].command_text(), "/bin/crow-cli acp");
+        assert_eq!(current_id(&path).as_deref(), Some("crow-cli"));
+    }
+
+    #[test]
+    fn all_skips_the_entries_a_picker_could_not_act_on() {
+        let path = tmp("all-broken.json");
+        for settings in [
+            "not json",
+            "{}",
+            r#"{"harnesses":"nope"}"#,
+            // no id → defaultHarness could never name it
+            r#"{"harnesses":[{"command":"/bin/h"}]}"#,
+            // blank command → not spawnable
+            r#"{"harnesses":[{"id":"h","command":"  "}]}"#,
+        ] {
+            std::fs::write(&path, settings).unwrap();
+            assert!(all(&path).is_empty(), "must offer nothing: {settings}");
+        }
+        assert!(all(&tmp("all-absent.json")).is_empty());
+        // A broken neighbour must not take the good entry down with it.
+        std::fs::write(
+            &path,
+            r#"{"harnesses":[{"id":"ok","command":"/bin/ok"},{"id":"bad","command":""}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            all(&path)
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ok"]
+        );
+    }
+
+    #[test]
+    fn a_label_falls_back_to_the_id_and_the_id_to_the_default() {
+        let path = tmp("all-labels.json");
+        std::fs::write(
+            &path,
+            r#"{"harnesses":[{"id":"plain","command":"/bin/p"},{"id":"spaced","label":"  ","command":"/bin/s"}],"activeHarness":"plain"}"#,
+        )
+        .unwrap();
+        let all = all(&path);
+        assert_eq!(all[0].label, "plain");
+        assert_eq!(all[1].label, "spaced", "a blank label is no label");
+        // `current_id` reads the legacy key too, exactly as `selected` does.
+        assert_eq!(current_id(&path).as_deref(), Some("plain"));
     }
 }

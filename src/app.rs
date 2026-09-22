@@ -176,6 +176,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         desc: "reasoning effort for this session",
     },
     SlashCommand {
+        name: "harness",
+        usage: "/harness [id]",
+        desc: "switch the agent harness — respawns the connection",
+    },
+    SlashCommand {
         name: "help",
         usage: "/help",
         desc: "show help and tips",
@@ -557,6 +562,7 @@ pub enum PickerKind {
     CordisPlugin,
     CordisApproval,
     AgentHistory,
+    Harness,
 }
 
 #[derive(Clone)]
@@ -2824,6 +2830,147 @@ impl App {
         });
     }
 
+    /// Forget every session's delivery state: the runtime that owned it is
+    /// gone, so nothing queued will ever be sent and nothing running will ever
+    /// settle. Tabs and their transcripts survive — this is the reset both a
+    /// runtime exit and a harness switch leave behind.
+    fn clear_delivery_state(&mut self) {
+        self.startup_bound = false;
+        self.prompt_pending = false;
+        self.queued = 0;
+        self.prompt_queue.clear();
+        self.queue_selection = None;
+        self.queue_edit = None;
+        self.pending_steer_cells.clear();
+        for slot in &mut self.parked {
+            // The dead runtime owned every session's delivery state,
+            // not just the viewed one.
+            slot.running = false;
+            slot.prompt_pending = false;
+            slot.prompt_queue.clear();
+            slot.queue_selection = None;
+            slot.queue_edit = None;
+            slot.pending_steer_cells.clear();
+        }
+        if self.state != RunState::Idle {
+            self.state = RunState::Idle;
+            self.run_started = None;
+        }
+    }
+
+    /// `settings.json` as `/harness` sees it — the same path `agent_argv`
+    /// resolves at boot, so the picker lists exactly what a restart would.
+    fn harness_settings_path(&self) -> std::path::PathBuf {
+        settings_path(&self.cfg.session_root)
+    }
+
+    fn open_harness_picker(&mut self) {
+        let path = self.harness_settings_path();
+        let current = crate::harness::current_id(&path);
+        let items = crate::harness::all(&path)
+            .into_iter()
+            .map(|entry| {
+                let active = current.as_deref() == Some(entry.id.as_str());
+                let command = entry.command_text();
+                PickerItem {
+                    id: entry.id,
+                    label: entry.label,
+                    meta: if active {
+                        format!("{command} · active")
+                    } else {
+                        command
+                    },
+                    provider: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            self.show_tip(self.locale.tr(
+                "no harnesses configured — add one to settings.json first",
+                "尚未配置 Harness —— 请先在 settings.json 中添加",
+            ));
+            return;
+        }
+        let sel = current
+            .as_deref()
+            .and_then(|id| items.iter().position(|item| item.id == id))
+            .unwrap_or(0);
+        self.picker = Some(Picker {
+            offset: 0,
+            kind: PickerKind::Harness,
+            title: self
+                .locale
+                .tr(
+                    " harness · enter switch · esc close ",
+                    " Harness · enter 切换 · esc 关闭 ",
+                )
+                .into(),
+            sel,
+            items,
+        });
+    }
+
+    /// `/harness <id>`: persist the choice, then hand the resolved argv to the
+    /// controller — it owns the endpoint, so it owns the respawn.
+    ///
+    /// The connection is replaced, not multiplexed: crow-term's ACP stack has
+    /// one negotiated connection for every tab, so the sessions belonging to the
+    /// old agent go with it. Their transcripts stay readable and the viewed tab
+    /// rebinds to whatever the new connection's setup produces.
+    fn switch_harness(&mut self, id: &str, ctl: &Controller) {
+        let id = id.trim();
+        let path = self.harness_settings_path();
+        let entries = crate::harness::all(&path);
+        let Some(entry) = entries.iter().find(|entry| entry.id == id) else {
+            self.show_tip(self.locale.trf(
+                "unknown harness: {} — /harness lists them",
+                "未知 Harness：{} —— 用 /harness 列出全部",
+                &[id.to_string()],
+            ));
+            return;
+        };
+        let label = entry.label.clone();
+        if crate::harness::current_id(&path).as_deref() == Some(id) {
+            self.show_tip(self.locale.trf(
+                "{} is already the active harness",
+                "{} 已经是当前 Harness",
+                &[label],
+            ));
+            return;
+        }
+        let argv = entry.harness.argv();
+        if let Err(err) = persist_default_harness(&path, id) {
+            self.transcript.push_notice(
+                NoticeLevel::Error,
+                self.locale.trf(
+                    "could not save the default harness: {}",
+                    "无法保存默认 Harness：{}",
+                    &[err.to_string()],
+                ),
+            );
+            return;
+        }
+        self.picker = None;
+        self.cancel_plugin_overlays(ctl);
+        self.clear_delivery_state();
+        self.awaiting_binds.clear();
+        ctl.send(Cmd::SwitchHarness { argv });
+        let notice = self
+            .locale
+            .trf("⟲ harness → {}", "⟲ Harness → {}", &[label]);
+        // The transcript copy is the durable one: it marks where the agent, and
+        // with it the protocol, changed. But a pane that has not sent a prompt
+        // yet draws the welcome banner instead of the transcript, so on a fresh
+        // start that copy is invisible — the same reason `TuiOpDone` tips. A
+        // switch drops every session; the user has to be told at the time.
+        self.transcript
+            .push_notice(NoticeLevel::Info, notice.clone());
+        if self.show_banner {
+            self.show_tip(notice);
+        }
+        self.needs_redraw = true;
+    }
+
     fn open_ui_plugin_picker(&mut self) {
         let items = self
             .ui_plugins
@@ -3180,6 +3327,7 @@ impl App {
             "model" => Some(self.current_model()),
             "effort" => self.modes.effort.clone(),
             "agent" => Some(self.current_mode()),
+            "harness" => crate::harness::current_id(&self.harness_settings_path()),
             "theme" => Some(self.active_palette_id.clone()),
             "permission" => Some(self.current_permission().to_string()),
             _ => None,
@@ -3258,6 +3406,13 @@ impl App {
                 .iter()
                 .map(|(id, label, desc)| {
                     ((*id).to_string(), (*label).to_string(), (*desc).to_string())
+                })
+                .collect(),
+            "harness" => crate::harness::all(&self.harness_settings_path())
+                .into_iter()
+                .map(|entry| {
+                    let command = entry.command_text();
+                    (entry.id, entry.label, command)
                 })
                 .collect(),
             "effort" if !self.effort_choices.is_empty() => self
@@ -3782,27 +3937,7 @@ impl App {
             AppEvent::RuntimeExited(code) => {
                 // A next prompt restarts the runtime; its fresh startup
                 // bind is again an unrequested one (see `startup_bound`).
-                self.startup_bound = false;
-                self.prompt_pending = false;
-                self.queued = 0;
-                self.prompt_queue.clear();
-                self.queue_selection = None;
-                self.queue_edit = None;
-                self.pending_steer_cells.clear();
-                for slot in &mut self.parked {
-                    // The dead runtime owned every session's delivery state,
-                    // not just the viewed one.
-                    slot.running = false;
-                    slot.prompt_pending = false;
-                    slot.prompt_queue.clear();
-                    slot.queue_selection = None;
-                    slot.queue_edit = None;
-                    slot.pending_steer_cells.clear();
-                }
-                if self.state != RunState::Idle {
-                    self.state = RunState::Idle;
-                    self.run_started = None;
-                }
+                self.clear_delivery_state();
                 if let Some(c) = code {
                     if c != 0 {
                     self.transcript.push_notice(
@@ -5641,26 +5776,7 @@ impl App {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let existing = std::fs::read_to_string(&path).ok();
-        let mut current = match existing
-            .as_deref()
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
-            .filter(serde_json::Value::is_object)
-        {
-            Some(value) => value,
-            None => {
-                // The same file carries compositor-owned keys (uiPreset,
-                // harness recipes). An unparseable file must not be silently
-                // replaced with `{}`: keep it for recovery.
-                if existing
-                    .as_deref()
-                    .is_some_and(|text| !text.trim().is_empty())
-                {
-                    let _ = std::fs::rename(&path, quarantined_settings_path(&path));
-                }
-                serde_json::json!({})
-            }
-        };
+        let mut current = settings_document(&path);
         current["language"] = serde_json::json!(self.locale);
         current["theme"] = serde_json::json!(self.active_palette_id);
         current["themeMode"] = serde_json::json!(self.committed_theme_mode().as_str());
@@ -6802,6 +6918,7 @@ impl App {
                     PickerKind::Model => self.select_model(item, ctl),
                     PickerKind::Mode => self.set_mode(item.id, ctl),
                     PickerKind::Theme => self.select_palette(&item.id, ctl),
+                    PickerKind::Harness => self.switch_harness(&item.id, ctl),
                     PickerKind::UiPlugin => {
                         ctl.send(Cmd::PluginUiSelected {
                             agent_id: self.session_id.clone(),
@@ -8272,6 +8389,13 @@ impl App {
                 };
                 self.show_tip(msg);
             }
+            "harness" => {
+                if arg.is_empty() {
+                    self.open_harness_picker();
+                } else {
+                    self.switch_harness(arg, ctl);
+                }
+            }
             "theme" => self.apply_theme_arg(arg, ctl),
             "vim" => {
                 let on = match arg {
@@ -9722,6 +9846,50 @@ impl App {
 #[path = "../tests/unit/app__persistent_shell_tests.rs"]
 mod persistent_shell_tests;
 
+/// The settings document to patch: the parsed file when it is an object,
+/// otherwise `{}`.
+///
+/// The same file carries compositor-owned keys (`uiPreset`, the harness recipes)
+/// alongside the painter's own, so every writer patches the parsed document
+/// rather than serializing a schema — an unknown key survives a theme change.
+/// A file that exists but does not parse is quarantined for recovery instead of
+/// being silently replaced.
+fn settings_document(path: &std::path::Path) -> serde_json::Value {
+    let existing = std::fs::read_to_string(path).ok();
+    match existing
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .filter(serde_json::Value::is_object)
+    {
+        Some(value) => value,
+        None => {
+            if existing
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty())
+            {
+                let _ = std::fs::rename(path, quarantined_settings_path(path));
+            }
+            serde_json::json!({})
+        }
+    }
+}
+
+/// Point `defaultHarness` at `id`, preserving every other key.
+///
+/// Written before the switch is requested, not after: a respawn that succeeds
+/// while the file still names the old recipe would come back as the old harness
+/// on the next launch, and the npm host would disagree with the running pane.
+fn persist_default_harness(path: &std::path::Path, id: &str) -> std::io::Result<()> {
+    let mut settings = settings_document(path);
+    settings["defaultHarness"] = serde_json::json!(id);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let text = serde_json::to_string_pretty(&settings)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    write_settings_atomic(path, &text)
+}
+
 /// `settings.json` → `settings.json.corrupt-<timestamp>`, preserving a file
 /// that exists but cannot be parsed for manual recovery.
 fn quarantined_settings_path(path: &std::path::Path) -> std::path::PathBuf {
@@ -9867,6 +10035,10 @@ mod right_slot_tests;
 #[cfg(test)]
 #[path = "../tests/unit/app__scroll_tests.rs"]
 mod scroll_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/app__harness_tests.rs"]
+mod harness_tests;
 
 #[cfg(test)]
 #[path = "../tests/unit/app__at_menu_tests.rs"]

@@ -3582,6 +3582,9 @@ fn draw_model_picker(f: &mut Frame, app: &mut App, screen: Rect) {
         | crate::app::PickerKind::Auth
         | crate::app::PickerKind::CordisPlugin
         | crate::app::PickerKind::CordisApproval
+        // The harness picker marks its active row in the meta column, which is
+        // where the recipe lives; a ✓ would only repeat it.
+        | crate::app::PickerKind::Harness
         | crate::app::PickerKind::AgentHistory => false,
     };
     // The popup caps at the screen; `ListView` scrolls the overflow instead
