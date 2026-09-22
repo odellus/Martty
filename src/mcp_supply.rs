@@ -341,6 +341,7 @@ fn expand_home(path: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
 
     fn tmp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("martty-mcp-supply-{}", std::process::id()));
@@ -486,5 +487,123 @@ mod tests {
         let nope = tmp("does-not-exist.json");
         assert!(from_settings_json(&nope).is_none());
         assert!(from_crow_config(&nope).is_none());
+    }
+
+    /// One supply in both wire spellings: stdio with env, http with headers,
+    /// and an sse server that v2 has no variant for.
+    fn mixed_supply() -> Vec<McpServer> {
+        vec![
+            McpServer::Stdio {
+                name: "crow-mcp".into(),
+                command: PathBuf::from("/bin/crow-mcp"),
+                args: vec!["mcp".into(), "--include-tools".into()],
+                env: vec![("FOO".into(), "bar".into())],
+            },
+            McpServer::Http {
+                name: "remote".into(),
+                url: "http://localhost:2769/mcp".into(),
+                headers: vec![("Authorization".into(), "Bearer t".into())],
+            },
+            McpServer::Sse {
+                name: "stream".into(),
+                url: "http://x/sse".into(),
+                headers: vec![],
+            },
+        ]
+    }
+
+    fn v1_json(servers: &[McpServer]) -> Value {
+        serde_json::to_value(
+            servers
+                .iter()
+                .cloned()
+                .map(McpServer::into_wire)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+
+    fn v2_json(servers: &[McpServer]) -> Value {
+        serde_json::to_value(
+            servers
+                .iter()
+                .cloned()
+                .map(McpServer::into_wire_v2)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+
+    /// The bug that kept a v2 session from ever opening: v1 marks its `Stdio`
+    /// variant `#[serde(untagged)]`, so a v1 stdio server carries no `type` key
+    /// at all, while v2 tags it and requires it. Converting by re-reading the
+    /// v1 JSON therefore failed on the one transport every agent must support,
+    /// and the `.expect()` panicked inside the connection's main_fn — the pane
+    /// sat at "starting runtime" with `session/new` never written and no error
+    /// anywhere to explain why.
+    #[test]
+    fn v2_stdio_carries_the_type_tag_v1_omits() {
+        let supply = mixed_supply();
+        let v1 = v1_json(&supply);
+        let v2 = v2_json(&supply);
+        assert_eq!(
+            v1[0].get("type"),
+            None,
+            "v1 stdio is untagged; the fixture must still show it"
+        );
+        assert_eq!(v2[0]["type"], json!("stdio"));
+        assert_eq!(v2[0]["name"], json!("crow-mcp"));
+        assert_eq!(v2[0]["command"], json!("/bin/crow-mcp"));
+        assert_eq!(v2[0]["args"], json!(["mcp", "--include-tools"]));
+        assert_eq!(v2[0]["env"], json!([{"name": "FOO", "value": "bar"}]));
+    }
+
+    /// Why [`wire_servers_v2`] builds from the domain enum instead of
+    /// re-reading the v1 wire JSON. Pinning the failure keeps the conversion
+    /// from being "simplified" back into a round trip that only breaks at
+    /// runtime, on a live agent, in a task whose panic nobody sees.
+    #[test]
+    fn the_v1_wire_json_does_not_read_back_as_v2() {
+        let supply = mixed_supply();
+        let reread = serde_json::from_value::<Vec<WireMcpServerV2>>(v1_json(&supply));
+        assert!(
+            reread.is_err(),
+            "if v1's JSON ever does read back as v2, the tagging changed and \
+             wire_servers_v2 can go back to being a re-read"
+        );
+        // The v2 spelling of the same supply does, which is the point.
+        let round = serde_json::from_value::<Vec<WireMcpServerV2>>(v2_json(&supply));
+        assert!(round.is_ok(), "{}", round.err().unwrap());
+        assert_eq!(round.unwrap().len(), 3);
+    }
+
+    /// v2 dropped the SSE transport. The payload crosses as an `Other` server
+    /// rather than being dropped, which is what the spec asks a receiver to do
+    /// with a transport it does not know: preserve it, then ignore or reject.
+    #[test]
+    fn v2_carries_sse_as_an_other_server() {
+        let v2 = v2_json(&mixed_supply());
+        assert_eq!(v2[2]["type"], json!("sse"));
+        assert_eq!(v2[2]["name"], json!("stream"));
+        assert_eq!(v2[2]["url"], json!("http://x/sse"));
+        match &mixed_supply().into_iter().nth(2).unwrap().into_wire_v2() {
+            WireMcpServerV2::Other(other) => assert_eq!(other.type_, "sse"),
+            other => panic!("expected an Other server, got {other:?}"),
+        }
+    }
+
+    /// http is tagged the same way in both versions, so it is the control: a
+    /// conversion that broke everything would break this too, and one that only
+    /// broke stdio is the one that actually shipped.
+    #[test]
+    fn v2_http_keeps_its_headers() {
+        let v1 = v1_json(&mixed_supply());
+        let v2 = v2_json(&mixed_supply());
+        assert_eq!(v1[1]["type"], json!("http"));
+        assert_eq!(v2[1], v1[1]);
+        assert_eq!(
+            v2[1]["headers"],
+            json!([{"name": "Authorization", "value": "Bearer t"}])
+        );
     }
 }
