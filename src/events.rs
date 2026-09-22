@@ -354,7 +354,7 @@ fn parse_session_update(params: &Value) -> Vec<UiEvent> {
                 vec![UiEvent::ReasoningDelta { session, text }]
             }
         }
-        "user_message_chunk" => {
+        "user_message_chunk" | "user_message" => {
             let text = acp_text_content(update.get("content"));
             if text.is_empty() {
                 Vec::new()
@@ -362,6 +362,45 @@ fn parse_session_update(params: &Value) -> Vec<UiEvent> {
                 vec![UiEvent::UserMessage { session, text }]
             }
         }
+        // v2 sends a whole message where v1 sends a run of chunks. `content` is
+        // an array of blocks rather than one block, which `acp_text_content`
+        // already reads. Landing on `AssistantFinal` rather than a delta is what
+        // makes both orders work: with no open cell it creates the finished one,
+        // and after chunks it supersedes the buffer instead of appending a
+        // second copy of the same sentence to it.
+        "agent_message" => {
+            let text = acp_text_content(update.get("content"));
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![UiEvent::AssistantFinal {
+                    session,
+                    text,
+                    model: None,
+                }]
+            }
+        }
+        "agent_thought" => {
+            let text = acp_text_content(update.get("content"));
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![UiEvent::ReasoningDelta { session, text }]
+            }
+        }
+        // The v2 stack owns this one: `state_update` is how a turn ends now
+        // that `PromptResponse` is an empty acknowledgement, and `acp::v2`
+        // settles its turn board off the idle before this parser ever sees it.
+        // Emitting `SessionStatus`/`TurnEnd` here too would report every turn
+        // twice — and agent2 re-emits idle every thirty seconds as a heartbeat.
+        "state_update" => Vec::new(),
+        // Terminal bytes have two audiences and only one of them is the
+        // transcript. `terminal_output_chunk` is base64 PTY output for a human
+        // watching a terminal pane; the model's copy of the same run arrives as
+        // `tool_call_update.raw_output`, which the arm above already paints.
+        // crow-term has no terminal pane, so painting the PTY stream into the
+        // transcript would be showing one thing twice.
+        "terminal_update" | "terminal_output_chunk" | "tool_call_content_chunk" => Vec::new(),
         "session_info_update" => {
             if let Some(failure) = update
                 .get("_meta")
@@ -711,6 +750,19 @@ pub fn flatten_select_options(options: &Value) -> Vec<(String, String, String)> 
     out
 }
 
+/// A config option's identifier.
+///
+/// v1 calls it `id`; v2 renamed it `configId` and the old key is gone, not
+/// aliased. Both spellings reach this parser, because a v2 `session/new`
+/// response and a v2 `config_option_update` are forwarded raw.
+pub fn config_id_of(option: &Value) -> Option<&str> {
+    option
+        .get("configId")
+        .or_else(|| option.get("config_id"))
+        .or_else(|| option.get("id"))
+        .and_then(Value::as_str)
+}
+
 /// The extra composition select, if the agent advertised one.
 /// Prefers `agent` / `preset` / `agent-preset`; else the first uncategorized
 /// select that is not mode/model/effort.
@@ -718,7 +770,7 @@ pub fn composition_option<'a>(options: &'a Value) -> Option<&'a Value> {
     let arr = options.as_array()?;
     let named = arr.iter().find(|option| {
         matches!(
-            option.get("id").and_then(Value::as_str),
+            config_id_of(option),
             Some("agent" | "preset" | "agent-preset")
         )
     });
@@ -729,7 +781,7 @@ pub fn composition_option<'a>(options: &'a Value) -> Option<&'a Value> {
         option.get("type").and_then(Value::as_str) == Some("select")
             && option.get("category").and_then(Value::as_str).is_none()
             && !matches!(
-                option.get("id").and_then(Value::as_str),
+                config_id_of(option),
                 Some("mode" | "model" | "effort" | "collaboration_mode")
             )
     })
@@ -749,7 +801,7 @@ fn collaboration_mode_active(options: Option<&Value>) -> Option<bool> {
     let option = options?
         .as_array()?
         .iter()
-        .find(|option| option.get("id").and_then(Value::as_str) == Some("collaboration_mode"))?;
+        .find(|option| config_id_of(option) == Some("collaboration_mode"))?;
     option
         .get("currentValue")
         .or_else(|| option.get("current_value"))
@@ -769,7 +821,7 @@ pub fn reasoning_effort_option(options: &Value) -> Option<&Value> {
         .or_else(|| {
             entries
                 .iter()
-                .find(|option| option.get("id").and_then(Value::as_str) == Some("effort"))
+                .find(|option| config_id_of(option) == Some("effort"))
         })
 }
 
@@ -781,7 +833,7 @@ pub fn config_option_events(session: String, options: &Value) -> Vec<UiEvent> {
     if let Some(model) = options.as_array().and_then(|entries| {
         entries
             .iter()
-            .find(|option| option.get("id").and_then(Value::as_str) == Some("model"))
+            .find(|option| config_id_of(option) == Some("model"))
             .and_then(|option| {
                 option
                     .get("currentValue")
@@ -832,7 +884,7 @@ pub fn catalog_from_config_options(
     if let Some(arr) = options.as_array() {
         if let Some(model) = arr
             .iter()
-            .find(|o| o.get("id").and_then(Value::as_str) == Some("model"))
+            .find(|o| config_id_of(o) == Some("model"))
         {
             for (id, name, _) in
                 flatten_select_options(model.get("options").unwrap_or(&Value::Null))
@@ -852,7 +904,7 @@ pub fn catalog_from_config_options(
     }
     let composition = composition_option(options);
     let composition_id = composition
-        .and_then(|o| o.get("id").and_then(Value::as_str))
+        .and_then(config_id_of)
         .map(str::to_string);
     let mut presets = Vec::new();
     if let Some(option) = composition {

@@ -111,6 +111,287 @@ impl ControlWorkers {
     }
 }
 
+/// The commands that look identical on every protocol version.
+///
+/// None of these builds a typed ACP request. They are Cordis extension calls
+/// and local-compositor projections: raw JSON-RPC over a `ConnectionTo<Agent>`,
+/// which is ONE type for both v1 and v2. Both stacks route through here, so a
+/// v2 connection gets the same chrome as a v1 one instead of reporting the
+/// queue and plugin planes as unsupported. Returns `true` when `cmd` was one of
+/// these and is now fully handled.
+pub(super) async fn run_version_neutral(
+    cmd: &Cmd,
+    cx: &ConnectionTo<Agent>,
+    bus: &Sender<AppEvent>,
+    surface: &Arc<Mutex<Surface>>,
+) -> bool {
+    match cmd {
+        Cmd::FetchStaticPlugins => match fetch_static_plugins(cx).await {
+            Ok(plugins) => {
+                let _ = bus.send(AppEvent::Ctl(CtlEvent::StaticPlugins { plugins }));
+            }
+            Err(error) => {
+                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                    "static plugins unavailable: {error}"
+                ))));
+            }
+        },
+        Cmd::FetchCordisPlugins { agent_id } => {
+            if !ensure_agent_cordis(surface, bus) {
+                return true;
+            }
+            match fetch_dynamic_plugins(cx, agent_id).await {
+                Ok(plugins) => {
+                    let _ = bus.send(AppEvent::Ctl(CtlEvent::CordisPlugins { plugins }));
+                }
+                Err(error) => {
+                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                        "dynamic plugins unavailable: {error}"
+                    ))));
+                }
+            }
+        }
+        Cmd::SetCordisPluginEnabled {
+            agent_id,
+            plugin_id,
+            enabled,
+        } => {
+            if !ensure_agent_cordis(surface, bus) {
+                return true;
+            }
+            let method = if *enabled {
+                crate::cordis::PLUGIN_START
+            } else {
+                crate::cordis::PLUGIN_STOP
+            };
+            let action = call_tui_extension(
+                cx,
+                method,
+                serde_json::json!({
+                    "agentId": agent_id,
+                    "pluginId": plugin_id,
+                }),
+            )
+            .await;
+            match action {
+                Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(false) => {
+                    let message = value
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("the Host rejected the lifecycle change");
+                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(message.to_string())));
+                }
+                Ok(_) => match fetch_dynamic_plugins(cx, agent_id).await {
+                    Ok(plugins) => {
+                        let _ = bus.send(AppEvent::Ctl(CtlEvent::CordisPlugins { plugins }));
+                    }
+                    Err(error) => {
+                        let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                            "plugin changed, but inventory refresh failed: {error}"
+                        ))));
+                    }
+                },
+                Err(error) => {
+                    let action = if *enabled { "restore" } else { "stop" };
+                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                        "plugin {action} failed: {error}"
+                    ))));
+                }
+            }
+        }
+        Cmd::RespondCordisApproval {
+            request_id,
+            decision,
+        } => {
+            if !ensure_agent_cordis(surface, bus) {
+                return true;
+            }
+            if let Err(error) = call_tui_extension(
+                cx,
+                crate::cordis::APPROVAL_RESPOND,
+                serde_json::json!({
+                    "protocol": crate::cordis::PROTOCOL,
+                    "requestId": request_id,
+                    "decision": decision,
+                }),
+            )
+            .await
+            {
+                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                    "plugin approval failed: {error}"
+                ))));
+            }
+        }
+        Cmd::InvokePluginCommand { name, args } => {
+            if !ensure_agent_cordis(surface, bus) {
+                return true;
+            }
+            if let Err(error) = call_tui_extension(
+                cx,
+                crate::cordis::COMMAND_INVOKE,
+                serde_json::json!({
+                    "protocol": 0,
+                    "name": name,
+                    "args": args,
+                }),
+            )
+            .await
+            {
+                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                    "plugin command failed: {error}"
+                ))));
+            }
+        }
+        Cmd::PluginThemeSelected { agent_id, id } => {
+            if !ensure_agent_cordis(surface, bus) {
+                return true;
+            }
+            let result = call_tui_extension(
+                cx,
+                crate::cordis::THEME_SELECTED,
+                serde_json::json!({
+                    "protocol": 0,
+                    "agentId": agent_id,
+                    "id": id,
+                }),
+            )
+            .await;
+            if let Err(error) = result {
+                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                    "theme Plugin selection failed: {error}"
+                ))));
+            }
+        }
+        Cmd::PluginUiSelected { agent_id, id } => {
+            if !ensure_agent_cordis(surface, bus) {
+                return true;
+            }
+            match call_tui_extension(
+                cx,
+                crate::cordis::UI_SELECTED,
+                serde_json::json!({
+                    "protocol": crate::cordis::PROTOCOL,
+                    "agentId": agent_id,
+                    "id": id,
+                }),
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                        "UI Plugin selection failed: {error}"
+                    ))));
+                }
+            }
+        }
+        Cmd::PluginOverlayEvent { id, event, value } => {
+            if !ensure_agent_cordis(surface, bus) {
+                return true;
+            }
+            let mut params = serde_json::json!({
+                "protocol": 0,
+                "id": id,
+                "event": event,
+            });
+            if let Some(value) = value {
+                params["value"] = value.clone();
+            }
+            let result = if event == "change" {
+                UntypedMessage::new(crate::cordis::OVERLAY_EVENT, params)
+                    .and_then(|notification| cx.send_notification(notification))
+                    .map(|_| Value::Null)
+            } else {
+                call_tui_extension(cx, crate::cordis::OVERLAY_EVENT, params).await
+            };
+            if let Err(error) = result {
+                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
+                    "plugin overlay event failed: {error}"
+                ))));
+            }
+        }
+        Cmd::QueueSnapshot { snapshot } => {
+            let items = snapshot
+                .items
+                .iter()
+                .map(|item| {
+                    serde_json::json!({
+                        "id": item.id,
+                        "ordinal": item.ordinal,
+                        "summary": item.summary,
+                    })
+                })
+                .collect::<Vec<_>>();
+            // This method belongs to the local Client compositor.
+            // Direct native launches may not have one, so absence is
+            // intentionally silent and never affects prompt flow.
+            // The mux consumes local Client projections before Agent forwarding.
+            if client_projection_available(surface) {
+                let _ = call_tui_extension(
+                    cx,
+                    crate::cordis::QUEUE_UPDATE,
+                    serde_json::json!({
+                        "protocol": crate::cordis::PROTOCOL,
+                        "count": snapshot.count,
+                        "items": items,
+                        "selectedId": snapshot.selected_id,
+                        "editingId": snapshot.editing_id,
+                        "deleteConfirm": snapshot.delete_confirm,
+                    }),
+                )
+                .await;
+            }
+        }
+        Cmd::AgentsSnapshot { snapshot } => {
+            let items = snapshot
+                .items
+                .iter()
+                .map(|item| {
+                    serde_json::json!({
+                        "id": item.id,
+                        "label": item.label,
+                        "kind": item.kind,
+                        "status": item.status,
+                        "current": item.current,
+                    })
+                })
+                .collect::<Vec<_>>();
+            // Agent transcript navigation is Client chrome;
+            // it never becomes an ACP prompt or timeline cell.
+            // Same negotiation guard as the queue snapshot.
+            if client_projection_available(surface) {
+                let _ = call_tui_extension(
+                    cx,
+                    crate::cordis::AGENTS_UPDATE,
+                    serde_json::json!({
+                        "protocol": crate::cordis::PROTOCOL,
+                        "activeId": snapshot.active_id,
+                        "selectedId": snapshot.selected_id,
+                        "items": items,
+                    }),
+                )
+                .await;
+            }
+        }
+        Cmd::ActiveSession { session_id } => {
+            surface.lock().unwrap_or_else(|e| e.into_inner()).active_session = session_id.clone();
+            if client_projection_available(surface) {
+                let _ = call_tui_extension(
+                    cx,
+                    crate::cordis::SESSION_ACTIVE,
+                    serde_json::json!({
+                        "protocol": crate::cordis::PROTOCOL,
+                        "sessionId": session_id,
+                    }),
+                )
+                .await;
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_control(
     cmd: Cmd,
@@ -125,6 +406,9 @@ async fn run_control(
     list_session: bool,
     done: tokio::sync::mpsc::UnboundedSender<ControlFinish>,
 ) {
+    if run_version_neutral(&cmd, &cx, &bus, &surface).await {
+        return;
+    }
     let connection = {
         let surface = surface.lock().unwrap_or_else(|e| e.into_inner());
         let target = match &cmd {
@@ -247,190 +531,6 @@ async fn run_control(
                         }));
                     }
                 }
-            }
-        }
-        Cmd::FetchStaticPlugins => match fetch_static_plugins(&cx).await {
-            Ok(plugins) => {
-                let _ = bus.send(AppEvent::Ctl(CtlEvent::StaticPlugins { plugins }));
-            }
-            Err(error) => {
-                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                    "static plugins unavailable: {error}"
-                ))));
-            }
-        },
-        Cmd::FetchCordisPlugins { agent_id } => {
-            if !ensure_agent_cordis(&surface, &bus) {
-                return;
-            }
-            match fetch_dynamic_plugins(&cx, &agent_id).await {
-                Ok(plugins) => {
-                    let _ = bus.send(AppEvent::Ctl(CtlEvent::CordisPlugins { plugins }));
-                }
-                Err(error) => {
-                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                        "dynamic plugins unavailable: {error}"
-                    ))));
-                }
-            }
-        }
-        Cmd::SetCordisPluginEnabled {
-            agent_id,
-            plugin_id,
-            enabled,
-        } => {
-            if !ensure_agent_cordis(&surface, &bus) {
-                return;
-            }
-            let method = if enabled {
-                crate::cordis::PLUGIN_START
-            } else {
-                crate::cordis::PLUGIN_STOP
-            };
-            let action = call_tui_extension(
-                &cx,
-                method,
-                serde_json::json!({
-                    "agentId": &agent_id,
-                    "pluginId": &plugin_id,
-                }),
-            )
-            .await;
-            match action {
-                Ok(value) if value.get("ok").and_then(Value::as_bool) == Some(false) => {
-                    let message = value
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("the Host rejected the lifecycle change");
-                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(message.to_string())));
-                }
-                Ok(_) => match fetch_dynamic_plugins(&cx, &agent_id).await {
-                    Ok(plugins) => {
-                        let _ = bus.send(AppEvent::Ctl(CtlEvent::CordisPlugins { plugins }));
-                    }
-                    Err(error) => {
-                        let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                            "plugin changed, but inventory refresh failed: {error}"
-                        ))));
-                    }
-                },
-                Err(error) => {
-                    let action = if enabled { "restore" } else { "stop" };
-                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                        "plugin {action} failed: {error}"
-                    ))));
-                }
-            }
-        }
-        Cmd::RespondCordisApproval {
-            request_id,
-            decision,
-        } => {
-            if !ensure_agent_cordis(&surface, &bus) {
-                return;
-            }
-            if let Err(error) = call_tui_extension(
-                &cx,
-                crate::cordis::APPROVAL_RESPOND,
-                serde_json::json!({
-                    "protocol": crate::cordis::PROTOCOL,
-                    "requestId": request_id,
-                    "decision": decision,
-                }),
-            )
-            .await
-            {
-                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                    "plugin approval failed: {error}"
-                ))));
-            }
-        }
-        Cmd::InvokePluginCommand { name, args } => {
-            if !ensure_agent_cordis(&surface, &bus) {
-                return;
-            }
-            if let Err(error) = call_tui_extension(
-                &cx,
-                crate::cordis::COMMAND_INVOKE,
-                serde_json::json!({
-                    "protocol": 0,
-                    "name": name,
-                    "args": args,
-                }),
-            )
-            .await
-            {
-                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                    "plugin command failed: {error}"
-                ))));
-            }
-        }
-        Cmd::PluginThemeSelected { agent_id, id } => {
-            if !ensure_agent_cordis(&surface, &bus) {
-                return;
-            }
-            let result = call_tui_extension(
-                &cx,
-                crate::cordis::THEME_SELECTED,
-                serde_json::json!({
-                    "protocol": 0,
-                    "agentId": agent_id,
-                    "id": id,
-                }),
-            )
-            .await;
-            if let Err(error) = result {
-                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                    "theme Plugin selection failed: {error}"
-                ))));
-            }
-        }
-        Cmd::PluginUiSelected { agent_id, id } => {
-            if !ensure_agent_cordis(&surface, &bus) {
-                return;
-            }
-            match call_tui_extension(
-                &cx,
-                crate::cordis::UI_SELECTED,
-                serde_json::json!({
-                    "protocol": crate::cordis::PROTOCOL,
-                    "agentId": agent_id,
-                    "id": id,
-                }),
-            )
-            .await
-            {
-                Ok(_) => {}
-                Err(error) => {
-                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                        "UI Plugin selection failed: {error}"
-                    ))));
-                }
-            }
-        }
-        Cmd::PluginOverlayEvent { id, event, value } => {
-            if !ensure_agent_cordis(&surface, &bus) {
-                return;
-            }
-            let mut params = serde_json::json!({
-                "protocol": 0,
-                "id": id,
-                "event": event,
-            });
-            if let Some(value) = value {
-                params["value"] = value;
-            }
-            let result = if event == "change" {
-                UntypedMessage::new(crate::cordis::OVERLAY_EVENT, params)
-                    .and_then(|notification| cx.send_notification(notification))
-                    .map(|_| Value::Null)
-            } else {
-                call_tui_extension(&cx, crate::cordis::OVERLAY_EVENT, params).await
-            };
-            if let Err(error) = result {
-                let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(format!(
-                    "plugin overlay event failed: {error}"
-                ))));
             }
         }
         Cmd::SetPermission {
@@ -725,83 +825,6 @@ async fn run_control(
                 (sid, setup, Some(notice))
             });
             let _ = done.send(ControlFinish::Setup { result, requester: None });
-        }
-        Cmd::QueueSnapshot { snapshot } => {
-            let items = snapshot
-                .items
-                .into_iter()
-                .map(|item| {
-                    serde_json::json!({
-                        "id": item.id,
-                        "ordinal": item.ordinal,
-                        "summary": item.summary,
-                    })
-                })
-                .collect::<Vec<_>>();
-            // This method belongs to the local Client compositor.
-            // Direct native launches may not have one, so absence is
-            // intentionally silent and never affects prompt flow.
-            // The mux consumes local Client projections before Agent forwarding.
-            if client_projection_available(&surface) {
-                let _ = call_tui_extension(
-                    &cx,
-                    crate::cordis::QUEUE_UPDATE,
-                    serde_json::json!({
-                        "protocol": crate::cordis::PROTOCOL,
-                        "count": snapshot.count,
-                        "items": items,
-                        "selectedId": snapshot.selected_id,
-                        "editingId": snapshot.editing_id,
-                        "deleteConfirm": snapshot.delete_confirm,
-                    }),
-                )
-                .await;
-            }
-        }
-        Cmd::AgentsSnapshot { snapshot } => {
-            let items = snapshot
-                .items
-                .into_iter()
-                .map(|item| {
-                    serde_json::json!({
-                        "id": item.id,
-                        "label": item.label,
-                        "kind": item.kind,
-                        "status": item.status,
-                        "current": item.current,
-                    })
-                })
-                .collect::<Vec<_>>();
-            // Agent transcript navigation is Client chrome;
-            // it never becomes an ACP prompt or timeline cell.
-            // Same negotiation guard as the queue snapshot.
-            if client_projection_available(&surface) {
-                let _ = call_tui_extension(
-                    &cx,
-                    crate::cordis::AGENTS_UPDATE,
-                    serde_json::json!({
-                        "protocol": crate::cordis::PROTOCOL,
-                        "activeId": snapshot.active_id,
-                        "selectedId": snapshot.selected_id,
-                        "items": items,
-                    }),
-                )
-                .await;
-            }
-        }
-        Cmd::ActiveSession { session_id } => {
-            surface.lock().unwrap_or_else(|e| e.into_inner()).active_session = session_id.clone();
-            if client_projection_available(&surface) {
-                let _ = call_tui_extension(
-                    &cx,
-                    crate::cordis::SESSION_ACTIVE,
-                    serde_json::json!({
-                        "protocol": crate::cordis::PROTOCOL,
-                        "sessionId": session_id,
-                    }),
-                )
-                .await;
-            }
         }
         _ => {}
     }

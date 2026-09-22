@@ -20,6 +20,7 @@
 //! auth stalls, [`super::apply_prompt_finish`] — is protocol-neutral too and is
 //! reused as-is. Only the wire calls are v2's own.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -40,10 +41,11 @@ use serde_json::{json, Value};
 use std::sync::mpsc::{Receiver, Sender};
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::control::run_version_neutral;
 use super::negotiate::Negotiated;
 use super::{
     abs_fs_path, acp_error_message, apply_config_response, apply_prompt_finish, apply_setup,
-    auth_stalled_for, bind_session, call_tui_extension, configured_snapshot, connection_id,
+    auth_stalled_for, bind_session, configured_snapshot, connection_id,
     declared_auth_methods, emit_auth, emit_needs_auth_open, emit_open_auth_if_needed,
     emit_session_bound, is_auth_required_error, needs_auth_snapshot, no_session, parse_auth_methods,
     parked_prompt, process_env, prompt_image_supported, requeue_connection_prompts,
@@ -102,16 +104,20 @@ fn board_lock(board: &Arc<Mutex<TurnBoard>>) -> std::sync::MutexGuard<'_, TurnBo
 }
 
 /// v2's stop reasons in the words the UI already knows. `Other` is the
-/// extension arm v1's enum cannot represent; it lands where v1's catch-all
-/// does, so an unknown reason stays visible instead of passing for success.
-fn stop_kind(reason: &v2::StopReason) -> &'static str {
+/// extension arm v1's enum cannot represent, and it keeps the agent's own word
+/// instead of passing for success or collapsing into "unknown".
+fn stop_kind(reason: &v2::StopReason) -> Cow<'static, str> {
     match reason {
-        v2::StopReason::EndTurn => "completed",
-        v2::StopReason::MaxTokens => "max-tokens",
-        v2::StopReason::MaxTurnRequests => "max-turn-requests",
-        v2::StopReason::Refusal => "blocked",
-        v2::StopReason::Cancelled => "interrupted",
-        _ => "unknown",
+        v2::StopReason::EndTurn => Cow::Borrowed("completed"),
+        v2::StopReason::MaxTokens => Cow::Borrowed("max-tokens"),
+        v2::StopReason::MaxTurnRequests => Cow::Borrowed("max-turn-requests"),
+        v2::StopReason::Refusal => Cow::Borrowed("blocked"),
+        v2::StopReason::Cancelled => Cow::Borrowed("interrupted"),
+        // agent2 sends `stopReason: "error"`; the spec's union is longer than
+        // this match, and a reason that renders as "unknown" is a reason the
+        // user cannot act on.
+        v2::StopReason::Other(reason) => Cow::Owned(reason.clone()),
+        _ => Cow::Borrowed("unknown"),
     }
 }
 
@@ -689,10 +695,10 @@ pub(super) async fn connect(
                                 if let v2::SessionUpdate::StateUpdate(state) = &parsed {
                                     if let v2::StateUpdate::Idle(idle) = state {
                                         let outcome = TurnOutcome::Stopped {
-                                            kind: idle
-                                                .stop_reason
-                                                .as_ref()
-                                                .map_or("completed", stop_kind),
+                                            kind: idle.stop_reason.as_ref().map_or_else(
+                                                || Cow::Borrowed("completed"),
+                                                stop_kind,
+                                            ),
                                             usage: idle.usage.as_ref().map(turn_usage),
                                         };
                                         board_lock(&board_n).settle(&session, outcome);
@@ -976,6 +982,16 @@ pub(super) async fn connect(
                                     }
                                 }
                             }
+                            // v2 tracks which session the chrome points at; the
+                            // projection itself is the same JSON-RPC on both
+                            // protocol versions, so it goes through the shared
+                            // dispatcher with the queue and plugin planes.
+                            if let Cmd::ActiveSession { session_id: Some(id) } = &cmd {
+                                if sessions.contains_key(id) {
+                                    current = Some(SessionId::new(id.clone()));
+                                }
+                            }
+                            if !run_version_neutral(&cmd, &cx, &bus, &stack.surface).await {
                             match cmd {
                                 Cmd::Prompt { session_id: cmd_session, text } => {
                                     let next = Cmd::Prompt { session_id: cmd_session.clone(), text };
@@ -1043,13 +1059,6 @@ pub(super) async fn connect(
                                         let key = sid.to_string();
                                         if let Some(handle) = sessions.get_mut(&key) {
                                             handle.turn_aborted = true;
-                                        }
-                                    }
-                                }
-                                Cmd::ActiveSession { session_id } => {
-                                    if let Some(session_id) = session_id {
-                                        if sessions.contains_key(&session_id) {
-                                            current = Some(SessionId::new(session_id));
                                         }
                                     }
                                 }
@@ -1206,12 +1215,63 @@ pub(super) async fn connect(
                                         None => {}
                                     }
                                 }
-                                Cmd::InvokePluginCommand { name, args } => {
-                                    let result = call_tui_extension(&cx, crate::cordis::COMMAND_INVOKE,
-                                        json!({"protocol": 0, "name": name, "args": args})).await;
-                                    if let Err(err) = result {
-                                        let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(
-                                            format!("plugin command: {}", acp_error_message(&err)))));
+                                // v2 has no `session/set_mode`: the permission
+                                // preset is a config option like any other. An
+                                // agent without one says so, and the badge still
+                                // moves — the preset is client-side chrome first,
+                                // exactly as it is on v1's fallback path.
+                                Cmd::SetPermission { session_id: cmd_session, preset } => {
+                                    match resolve_cmd_session(&sessions, &current, &cmd_session, "permission") {
+                                        Ok(Some(sid)) => {
+                                            let done = match set_config_option(&stack, &sid,
+                                                "mode", Value::String(preset.clone())).await {
+                                                Ok(_) => format!("permission → {preset}"),
+                                                Err(err) if is_auth_required_error(&err) => {
+                                                    emit_needs_auth_open(&bus, methods.clone(),
+                                                        selected.as_ref(), Some(acp_error_message(&err)));
+                                                    format!("permission → {preset}")
+                                                }
+                                                Err(err) => format!(
+                                                    "permission → {preset} ({})", acp_error_message(&err)),
+                                            };
+                                            let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpDone(done)));
+                                        }
+                                        Ok(None) => {}
+                                        Err(message) => {
+                                            let _ = bus.send(AppEvent::Ctl(CtlEvent::SessionOpFailed {
+                                                session_id: cmd_session, message }));
+                                        }
+                                    }
+                                }
+                                Cmd::SetPreset { session_id: cmd_session, preset } => {
+                                    match resolve_cmd_session(&sessions, &current, &cmd_session, "preset") {
+                                        Ok(Some(sid)) => {
+                                            let config_id = stack.surface.lock()
+                                                .unwrap_or_else(|e| e.into_inner())
+                                                .session(&sid.0).composition_id.clone()
+                                                .unwrap_or_else(|| "agent".into());
+                                            match set_config_option(&stack, &sid, &config_id,
+                                                Value::String(preset.clone())).await {
+                                                Ok(_) => {
+                                                    let _ = bus.send(AppEvent::Ctl(CtlEvent::PresetSet {
+                                                        session_id: sid.to_string(), preset }));
+                                                }
+                                                Err(err) if is_auth_required_error(&err) => {
+                                                    emit_needs_auth_open(&bus, methods.clone(),
+                                                        selected.as_ref(), Some(acp_error_message(&err)));
+                                                }
+                                                Err(err) => {
+                                                    let _ = bus.send(AppEvent::Ctl(CtlEvent::TuiOpFailed(
+                                                        format!("composition switch failed: {}",
+                                                            acp_error_message(&err)))));
+                                                }
+                                            }
+                                        }
+                                        Ok(None) => {}
+                                        Err(message) => {
+                                            let _ = bus.send(AppEvent::Ctl(CtlEvent::SessionOpFailed {
+                                                session_id: cmd_session, message }));
+                                        }
                                     }
                                 }
                                 Cmd::Shutdown => break,
@@ -1219,6 +1279,7 @@ pub(super) async fn connect(
                                     let _ = bus.send(AppEvent::Ctl(CtlEvent::Error(format!(
                                         "acp2: {:?} is not supported on a v2 connection", other))));
                                 }
+                            }
                             }
                         }
                         steer = steer_done_rx.recv() => {

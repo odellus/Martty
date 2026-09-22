@@ -36,6 +36,10 @@ use agent_client_protocol::schema::v1::{
     EnvVariable, HttpHeader, McpServer as WireMcpServer, McpServerHttp, McpServerSse,
     McpServerStdio,
 };
+use agent_client_protocol::schema::v2::{
+    self, McpServer as WireMcpServerV2, McpServerHttp as WireMcpServerHttpV2,
+    McpServerStdio as WireMcpServerStdioV2, OtherMcpServer,
+};
 
 pub const CROW_CONFIG: &str = "~/.agents/crow/config.yaml";
 
@@ -82,6 +86,41 @@ impl McpServer {
             }
         }
     }
+
+    fn into_wire_v2(self) -> WireMcpServerV2 {
+        match self {
+            Self::Stdio {
+                name,
+                command,
+                args,
+                env,
+            } => WireMcpServerV2::Stdio(
+                WireMcpServerStdioV2::new(name, command).args(args).env(
+                    env.into_iter()
+                        .map(|(name, value)| v2::EnvVariable::new(name, value))
+                        .collect(),
+                ),
+            ),
+            Self::Http { name, url, headers } => WireMcpServerV2::Http(
+                WireMcpServerHttpV2::new(name, url).headers(
+                    headers
+                        .into_iter()
+                        .map(|(name, value)| v2::HttpHeader::new(name, value))
+                        .collect(),
+                ),
+            ),
+            Self::Sse { name, url, headers } => {
+                let mut fields = std::collections::BTreeMap::new();
+                fields.insert("name".to_owned(), serde_json::Value::String(name));
+                fields.insert("url".to_owned(), serde_json::Value::String(url));
+                fields.insert(
+                    "headers".to_owned(),
+                    serde_json::to_value(wire_headers(headers)).unwrap_or_default(),
+                );
+                WireMcpServerV2::Other(OtherMcpServer::new("sse", fields))
+            }
+        }
+    }
 }
 
 fn wire_headers(pairs: Vec<(String, String)>) -> Vec<HttpHeader> {
@@ -98,13 +137,17 @@ pub fn wire_servers() -> Vec<WireMcpServer> {
 
 /// The v2 spelling of the same supply.
 ///
-/// v1 and v2 `McpServer` are field-identical — stdio is name/command/args/env,
-/// http and sse are name/url/headers — so the wire JSON is the wire JSON and
-/// the conversion is a re-read of it. A schema that stops being identical
-/// should fail here, loudly, rather than hand the agent a toolless session.
-pub fn wire_servers_v2() -> Vec<agent_client_protocol::schema::v2::McpServer> {
-    let value = serde_json::to_value(wire_servers()).expect("mcp supply serializes");
-    serde_json::from_value(value).expect("v2 McpServer matches the v1 wire shape")
+/// Built from the domain enum, NOT re-read from the v1 wire JSON: the two
+/// enums are tagged differently. v1 marks `Stdio` `#[serde(untagged)]`, so a
+/// v1 stdio server serializes with no `type` key at all, while v2 tags it
+/// `{"type":"stdio"}` and requires it. A round trip through v1's JSON
+/// therefore fails on exactly the transport every agent must support.
+///
+/// v2 also dropped the SSE transport. The payload is carried across as an
+/// `Other` server, which is what the spec asks a receiver to do with a
+/// transport it does not know: preserve it, then ignore or reject it.
+pub fn wire_servers_v2() -> Vec<WireMcpServerV2> {
+    load().into_iter().map(McpServer::into_wire_v2).collect()
 }
 
 fn load() -> Vec<McpServer> {

@@ -5,6 +5,7 @@
 //! Transcript paint comes from `session/update`. Negotiated Cordis TUI
 //! compositor state arrives as `_dsh/cordis/tui/*` extension notifications.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::sync::mpsc::{Receiver, Sender};
@@ -48,7 +49,7 @@ use crate::bus::{
     PermissionAskOption, PermissionAskReply, SessionListItem, StaticPluginItem,
 };
 use crate::events::{
-    catalog_from_config_options, config_option_events, flatten_select_options,
+    catalog_from_config_options, config_id_of, config_option_events, flatten_select_options,
     reasoning_effort_option, session_modes_from_value, skills_from_available_commands,
 };
 use crate::runtime::RuntimeConfig;
@@ -133,10 +134,8 @@ impl Surface {
         }
         if let Some(arr) = options.as_array() {
             if let Some(effort) = reasoning_effort_option(options) {
-                target.effort_config_id = effort
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
+                target.effort_config_id =
+                    config_id_of(effort).map(str::to_string);
                 target.effort_current = effort
                     .get("currentValue")
                     .or_else(|| effort.get("current_value"))
@@ -155,7 +154,7 @@ impl Surface {
             // own currentValue, so per-session state is not lost.
             if let Some(mode) = arr
                 .iter()
-                .find(|o| o.get("id").and_then(Value::as_str) == Some("mode"))
+                .find(|o| config_id_of(o) == Some("mode"))
             {
                 let list: Vec<CatalogPreset> =
                     flatten_select_options(mode.get("options").unwrap_or(&Value::Null))
@@ -333,8 +332,12 @@ struct TurnUsage {
 enum TurnOutcome {
     /// The agent said why it stopped. `kind` is the UI's word for the stop
     /// reason; `usage` is what the turn cost, when the agent reports one.
+    ///
+    /// A `Cow` because v2's `StopReason` has an untagged `Other(String)`: an
+    /// agent that stops for a reason this client has never seen keeps its own
+    /// word for it instead of being flattened into "unknown".
     Stopped {
-        kind: &'static str,
+        kind: Cow<'static, str>,
         usage: Option<TurnUsage>,
     },
     /// The request never produced a turn.
@@ -349,7 +352,7 @@ impl TurnOutcome {
 
     /// `session/cancel` reached the agent and it confirmed the interruption.
     fn cancelled(&self) -> bool {
-        matches!(self, Self::Stopped { kind: "interrupted", .. })
+        matches!(self, Self::Stopped { kind, .. } if kind == "interrupted")
     }
 }
 
@@ -370,7 +373,7 @@ impl From<Result<agent_client_protocol::schema::v1::PromptResponse, AcpError>> f
     fn from(result: Result<agent_client_protocol::schema::v1::PromptResponse, AcpError>) -> Self {
         match result {
             Ok(response) => Self::Stopped {
-                kind: v1_stop_kind(response.stop_reason),
+                kind: Cow::Borrowed(v1_stop_kind(response.stop_reason)),
                 usage: response.usage.map(|usage| TurnUsage {
                     input: usage.input_tokens,
                     output: usage.output_tokens,
