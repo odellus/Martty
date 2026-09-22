@@ -10,7 +10,7 @@
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
@@ -126,10 +126,26 @@ impl Pane {
     }
 
     fn wire(&self) -> Vec<serde_json::Value> {
-        let body = std::fs::read_to_string(self.home.join("wire.jsonl")).unwrap_or_default();
+        self.log("wire.jsonl")
+    }
+
+    /// The frames of any wire log under this pane's home. A harness switch
+    /// spawns a second agent, and both stubs report the same `agentInfo` name,
+    /// so which log grew is the only way to tell them apart.
+    fn log(&self, name: &str) -> Vec<serde_json::Value> {
+        let body = std::fs::read_to_string(self.home.join(name)).unwrap_or_default();
         body.lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
             .collect()
+    }
+
+    /// The `params` of the first request in `log` under `method`.
+    fn log_request_params(&self, log: &str, method: &str) -> serde_json::Value {
+        self.log(log)
+            .iter()
+            .find(|entry| entry["msg"]["method"].as_str() == Some(method))
+            .map(|entry| entry["msg"]["params"].clone())
+            .unwrap_or(serde_json::Value::Null)
     }
 
     fn pump(&mut self) {
@@ -193,6 +209,16 @@ impl Drop for Pane {
     }
 }
 
+/// This test's home directory. Named here and nowhere else: a test that seeds
+/// `settings.json` has to point a harness recipe at a wire log inside it, and
+/// two spellings of the path would silently write to two different places.
+fn e2e_home(tag: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "crow-term-startup-e2e-{}-{tag}",
+        std::process::id()
+    ))
+}
+
 /// Start crow-term on a fresh PTY against the stub agent. `None` (a skipped test)
 /// when this machine has no python3 to run the fixture with.
 fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
@@ -217,15 +243,35 @@ fn launch_with(
     stub: &[(&str, &str)],
     settings: Option<&str>,
 ) -> Option<Pane> {
+    spawn_pane(tag, args, settings, Some(stub))
+}
+
+/// Boot with no `--agent` at all, so the binary resolves its agent from the
+/// `harnesses` recipe in `settings.json` exactly the way a bare launch does.
+///
+/// A harness entry cannot carry environment — `AcpAgent::from_args` takes an
+/// argv and nothing else, and `main.rs::agent_argv` uses only `harness.argv()`
+/// — so a recipe that has to configure the stub wraps it in a shell:
+/// `/bin/sh -c "STUB_LOG=… exec python3 …"`. That is also what a real
+/// `settings.json` recipe looks like when it needs environment.
+fn launch_from_settings(tag: &str, args: &[&str], settings: &str) -> Option<Pane> {
+    spawn_pane(tag, args, Some(settings), None)
+}
+
+/// `stub` is `None` when the agent comes from `settings.json` instead of the
+/// command line.
+fn spawn_pane(
+    tag: &str,
+    args: &[&str],
+    settings: Option<&str>,
+    stub: Option<&[(&str, &str)]>,
+) -> Option<Pane> {
     if Command::new("python3").arg("--version").output().is_err() {
         eprintln!("skipping {tag}: python3 not found");
         return None;
     }
     let gate = GATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let home = std::env::temp_dir().join(format!(
-        "crow-term-startup-e2e-{}-{tag}",
-        std::process::id()
-    ));
+    let home = e2e_home(tag);
     let _ = std::fs::remove_dir_all(&home);
     for sub in ["ws", "sessions"] {
         std::fs::create_dir_all(home.join(sub)).expect("create e2e home");
@@ -261,11 +307,16 @@ fn launch_with(
     let slave = unsafe { File::from_raw_fd(slave_fd) };
     let stderr = File::create(home.join("stderr.txt")).expect("capture stderr");
     let mut command = Command::new(env!("CARGO_BIN_EXE_crow-term"));
+    // No `--agent` at all when the recipe comes from settings.json: passing one
+    // would win over `harness::selected()` and the test would prove nothing.
+    if stub.is_some() {
+        command
+            .arg("--agent")
+            .arg("python3")
+            .arg("--agent-arg")
+            .arg(FIXTURE);
+    }
     command
-        .arg("--agent")
-        .arg("python3")
-        .arg("--agent-arg")
-        .arg(FIXTURE)
         .arg("-w")
         .arg(home.join("ws"))
         .arg("--session-root")
@@ -278,7 +329,7 @@ fn launch_with(
         .stdin(Stdio::from(slave.try_clone().expect("clone PTY stdin")))
         .stdout(Stdio::from(slave))
         .stderr(Stdio::from(stderr));
-    for (key, value) in stub {
+    for (key, value) in stub.unwrap_or_default() {
         command.env(key, value);
     }
     let child = command.spawn().expect("start crow-term on the PTY");
@@ -695,5 +746,244 @@ fn a_v2_permission_ask_reaches_the_user_and_the_answer_reaches_the_agent() {
     let answer = &reply["msg"]["result"]["outcome"];
     assert_eq!(answer["outcome"], "selected");
     assert_eq!(answer["optionId"], "allow");
+    pane.assert_alive();
+}
+
+// ---------------------------------------------------------------------------
+// /harness — switching the agent from inside the TUI
+// ---------------------------------------------------------------------------
+
+/// Wait until `log` holds at least `want` frames. The agent writes the log, so
+/// nothing on the screen marks its arrival and `expect` cannot see it.
+fn wait_for_frames(pane: &mut Pane, log: &str, want: usize) -> Vec<serde_json::Value> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        pane.pump();
+        let frames = pane.log(log);
+        if frames.len() >= want {
+            return frames;
+        }
+        if let Some(status) = pane.child.try_wait().expect("poll crow-term") {
+            panic!(
+                "crow-term exited ({status}) with {want} frames never reaching {log}\n{}",
+                pane.diagnosis()
+            );
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "{log} never reached {want} frames (has {})\n{}",
+                frames.len(),
+                pane.diagnosis()
+            );
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn methods_of(frames: &[serde_json::Value]) -> Vec<String> {
+    frames
+        .iter()
+        .filter_map(|entry| entry["msg"]["method"].as_str())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The agent this harness replaced must be gone, not merely unused: `AcpAgent`'s
+/// child guard kills the process group when the client is dropped, and a switch
+/// that leaked one would leave an agent running per `/harness`. A zombie counts
+/// as gone — it is dead and waiting on its parent's reap, not holding a pty.
+#[cfg(target_os = "linux")]
+fn assert_agent_gone(pid_file: &Path) {
+    let body = std::fs::read_to_string(pid_file).expect("the recipe wrote its pid");
+    let pid: i32 = body.trim().parse().expect("the pid parses");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        // `comm` can contain spaces and parens, so split from the last one.
+        let running = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => match stat.rsplit_once(')') {
+                Some((_, rest)) => !rest.trim_start().starts_with('Z'),
+                None => true,
+            },
+            Err(_) => false,
+        };
+        if !running {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the replaced agent (pid {pid}) is still running"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn assert_agent_gone(_pid_file: &Path) {}
+
+/// Boot on one harness recipe, `/harness` to another, and prove the connection
+/// was replaced rather than renegotiated in place.
+///
+/// This is the thing the npm host cannot do. `acp-agent-pool.js::setDefaultAgent`
+/// only changes the recipe for the *next* `session/new` — one pool, one
+/// connection per agent identity — so switching harness there leaves the live
+/// pane talking to the agent it started with, and `setDefaultAgent` on a v2
+/// recipe over the v1-only `acp-client.js` hangs. crow-term has one negotiated
+/// connection for every tab, so the honest semantic is a respawn, and a respawn
+/// has to re-run the union probe: which protocol the pane speaks is a property
+/// of the agent, not of the config that named it.
+#[test]
+fn a_harness_switch_respawns_the_agent_and_the_new_one_answers() {
+    let tag = "hswitch";
+    let home = e2e_home(tag);
+    let (log_a, log_b) = ("wire-a.jsonl", "wire-b.jsonl");
+
+    // A harness entry carries an argv and no environment, so the stub's
+    // configuration rides in a shell wrapper — which is also what a real
+    // recipe looks like when it needs environment.
+    let recipe = |id: &str, label: &str, log: &str, extra: &str| -> serde_json::Value {
+        let pid = home.join(format!(
+            "pid-{}",
+            log.trim_start_matches("wire-").trim_end_matches(".jsonl")
+        ));
+        serde_json::json!({
+            "id": id,
+            "label": label,
+            "command": "/bin/sh",
+            "args": ["-c", format!(
+                "echo $$ > {}; {extra} STUB_LOG={} exec python3 {FIXTURE}",
+                pid.display(),
+                home.join(log).display()
+            )],
+        })
+    };
+    let mut settings = serde_json::Map::new();
+    settings.insert(
+        "harnesses".into(),
+        serde_json::json!([
+            recipe("stub-v1", "stub (ACP v1)", log_a, "STUB_CAPS=load"),
+            recipe(
+                "stub-v2",
+                "stub (ACP v2)",
+                log_b,
+                "STUB_PROTOCOL=2 STUB_CAPS=both"
+            ),
+        ]),
+    );
+    settings.insert("defaultHarness".into(), serde_json::json!("stub-v1"));
+    // Pin the tool supply: without `mcpServers` in settings.json the launch
+    // falls through to the developer's real `~/.agents/crow/config.yaml`, and
+    // the transport-tagging assertion below would be about that machine.
+    let supply: serde_json::Value = serde_json::from_str(SUPPLY).expect("SUPPLY parses");
+    for (key, value) in supply.as_object().expect("SUPPLY is an object") {
+        settings.insert(key.clone(), value.clone());
+    }
+    let settings = serde_json::Value::Object(settings).to_string();
+
+    let Some(mut pane) = launch_from_settings(tag, &[], &settings) else {
+        return;
+    };
+    // No `--agent` on that command line, so the boot agent came out of
+    // settings.json — `stub-default` is the session being up.
+    pane.expect(&["stub-default"]);
+    let boot = wait_for_frames(&mut pane, log_a, 2);
+    assert_eq!(
+        methods_of(&boot),
+        ["initialize", "session/new"],
+        "the selected harness started and the other one did not"
+    );
+    assert!(
+        pane.log(log_b).is_empty(),
+        "stub-v2 was not selected at boot"
+    );
+    let boot_frames = boot.len();
+
+    pane.send("/harness stub-v2\r");
+    pane.expect(&["⟲ harness → stub (ACP v2)"]);
+    let switched = wait_for_frames(&mut pane, log_b, 2);
+    assert_eq!(
+        methods_of(&switched),
+        ["initialize", "session/new"],
+        "the switch spawned and negotiated a second agent:\n{}",
+        pane.squeezed()
+    );
+
+    // The choice is persisted before the respawn is requested, and it is a
+    // patch: the same file carries the compositor's keys.
+    let saved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(pane.home.join("settings.json")).expect("settings.json"),
+    )
+    .expect("settings.json is valid JSON");
+    assert_eq!(
+        saved["defaultHarness"], "stub-v2",
+        "the choice outlives the process"
+    );
+    assert!(
+        saved["mcpServers"].is_object(),
+        "one key was patched, not the file rewritten"
+    );
+    assert_eq!(
+        saved["harnesses"].as_array().map(Vec::len),
+        Some(2),
+        "both recipes survive"
+    );
+
+    // The switch re-ran the union probe, so the pane changed protocol stack.
+    // v1's `McpServer::Stdio` is `#[serde(untagged)]` — no `type` key on the
+    // wire — and v2's is internally tagged, so the two `session/new` requests
+    // cannot both be right.
+    let stdio_server = |log: &str| -> serde_json::Value {
+        let servers = pane.log_request_params(log, "session/new")["mcpServers"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{log}'s session/new carries mcpServers"))
+            .clone();
+        assert_eq!(servers.len(), 2, "{servers:?}");
+        servers
+            .into_iter()
+            .find(|server| server["name"] == "crow-mcp")
+            .unwrap_or_else(|| panic!("{log}'s session/new carries the stdio server"))
+    };
+    // Only `Stdio` differs: v1's is `#[serde(untagged)]` and v2's is internally
+    // tagged, so the same supply serialises two ways and the pair of logs says
+    // which stack each connection was negotiated onto.
+    let boot_stdio = stdio_server(log_a);
+    assert!(
+        boot_stdio.get("type").is_none(),
+        "the boot harness spoke v1, whose stdio server carries no tag: {boot_stdio}"
+    );
+    let new_stdio = stdio_server(log_b);
+    assert_eq!(
+        new_stdio["type"], "stdio",
+        "the harness it switched to speaks v2, whose stdio server is tagged: {new_stdio}"
+    );
+
+    // The replaced agent is dead, not merely idle.
+    assert_agent_gone(&home.join("pid-a"));
+
+    // And the pane is still usable: the next prompt goes to the agent the user
+    // just picked, over the protocol that agent negotiated.
+    pane.send("after the switch\r");
+    pane.expect(&["after the switch", "stub reply ok"]);
+    let prompted = wait_for_frames(&mut pane, log_b, 3);
+    let prompt = prompted
+        .iter()
+        .find(|entry| entry["msg"]["method"].as_str() == Some("session/prompt"))
+        .expect("the new agent got the prompt");
+    assert_eq!(
+        prompt["msg"]["params"]["prompt"][0]["text"],
+        "after the switch"
+    );
+
+    let left_behind = pane.log(log_a);
+    assert!(
+        methods_of(&left_behind)
+            .iter()
+            .all(|method| method != "session/prompt"),
+        "the prompt went to the agent the user picked, not the one being replaced"
+    );
+    assert_eq!(
+        left_behind.len(),
+        boot_frames,
+        "the replaced agent's log stopped at the switch"
+    );
     pane.assert_alive();
 }
