@@ -8,7 +8,7 @@
 //! plus the agent's own JSONL wire log.
 
 use std::fs::File;
-use std::io::{ErrorKind, Read};
+use std::io::{ErrorKind, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -75,6 +75,15 @@ impl Pane {
         }
     }
 
+    /// Type into the pane. `keys` goes to the PTY verbatim, so `\r` submits and
+    /// `\x1b` is the interrupt the composer binds to escape.
+    fn send(&mut self, keys: &str) {
+        self.master
+            .write_all(keys.as_bytes())
+            .expect("write to the PTY");
+        self.master.flush().expect("flush the PTY");
+    }
+
     /// The startup path must not crash or exit: a bound (or refused) session
     /// leaves the TUI up and usable.
     fn assert_alive(&mut self) {
@@ -93,6 +102,16 @@ impl Pane {
             .filter_map(|entry| entry["msg"]["method"].as_str())
             .map(str::to_owned)
             .collect()
+    }
+
+    /// The `params` of the first request the agent received under `method`, or
+    /// null when it never got one.
+    fn request_params(&self, method: &str) -> serde_json::Value {
+        self.wire()
+            .iter()
+            .find(|entry| entry["msg"]["method"].as_str() == Some(method))
+            .map(|entry| entry["msg"]["params"].clone())
+            .unwrap_or(serde_json::Value::Null)
     }
 
     /// The `value` of each `session/set_config_option` the agent received —
@@ -177,6 +196,27 @@ impl Drop for Pane {
 /// Start crow-term on a fresh PTY against the stub agent. `None` (a skipped test)
 /// when this machine has no python3 to run the fixture with.
 fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
+    let mut stub = vec![("STUB_CAPS", caps)];
+    if refuse {
+        stub.push(("STUB_LOAD_FAIL", "1"));
+    }
+    launch_with(tag, args, &stub, None)
+}
+
+/// The launch core. `stub` is the fixture's environment — `STUB_PROTOCOL=2` is
+/// what makes it answer the union `initialize` as a v2 agent — and `settings` is
+/// the body of `<CROW_HOME>/settings.json`.
+///
+/// That file is how a test pins the MCP supply. Without it `mcp_supply::load()`
+/// falls through to the developer's real `~/.agents/crow/config.yaml`, and an
+/// assertion about the servers in `session/new` would then be reading whatever
+/// happened to be configured on the machine running the suite.
+fn launch_with(
+    tag: &str,
+    args: &[&str],
+    stub: &[(&str, &str)],
+    settings: Option<&str>,
+) -> Option<Pane> {
     if Command::new("python3").arg("--version").output().is_err() {
         eprintln!("skipping {tag}: python3 not found");
         return None;
@@ -189,6 +229,9 @@ fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
     let _ = std::fs::remove_dir_all(&home);
     for sub in ["ws", "sessions"] {
         std::fs::create_dir_all(home.join(sub)).expect("create e2e home");
+    }
+    if let Some(body) = settings {
+        std::fs::write(home.join("settings.json"), body).expect("write e2e settings");
     }
 
     let mut master_fd = -1;
@@ -231,13 +274,12 @@ fn launch(tag: &str, caps: &str, refuse: bool, args: &[&str]) -> Option<Pane> {
         .env("TERM", "xterm-256color")
         .env("CROW_HOME", &home)
         .env("STUB_LOG", home.join("wire.jsonl"))
-        .env("STUB_CAPS", caps)
         .env_remove("TERM_PROGRAM")
         .stdin(Stdio::from(slave.try_clone().expect("clone PTY stdin")))
         .stdout(Stdio::from(slave))
         .stderr(Stdio::from(stderr));
-    if refuse {
-        command.env("STUB_LOAD_FAIL", "1");
+    for (key, value) in stub {
+        command.env(key, value);
     }
     let child = command.spawn().expect("start crow-term on the PTY");
 
@@ -446,6 +488,162 @@ fn a_replayed_tool_call_shows_its_command_and_output_however_the_agent_sends_the
         screen.matches("print(6 * 9)").count(),
         1,
         "the echoed command is drawn once:\n{screen}"
+    );
+    pane.assert_alive();
+}
+
+
+// ---------------------------------------------------------------------------
+// ACP v2 — the same binary on the same PTY, with a stub that answers the union
+// `initialize` as a v2 agent. Every shape below is one v1 never had to get
+// right, and each one is a thing that actually broke.
+// ---------------------------------------------------------------------------
+
+/// The stub speaking v2. `STUB_CAPS=both` is what a real v2 agent looks like
+/// from here: `capabilities.session` is a presence marker, so resume and list
+/// are both on and `session/load` does not exist at all.
+const V2_STUB: [(&str, &str); 2] = [("STUB_PROTOCOL", "2"), ("STUB_CAPS", "both")];
+
+/// A pinned tool supply. With no `mcpServers` in `<CROW_HOME>/settings.json`
+/// the launch falls through to the developer's real `~/.agents/crow/config.yaml`
+/// and these assertions become about that machine instead of about crow-term.
+/// One stdio and one http, because stdio is the transport the two protocols
+/// disagree about.
+const SUPPLY: &str = r#"{"mcpServers":{
+  "crow-mcp":{"command":"/bin/echo","args":["mcp"],"env":{"FOO":"bar"}},
+  "remote":{"url":"https://example.invalid/mcp","headers":{"Authorization":"Bearer t"}}
+}}"#;
+
+#[test]
+fn a_v2_agent_is_negotiated_and_its_tool_supply_carries_its_transport() {
+    let Some(mut pane) = launch_with("v2-new", &[], &V2_STUB, Some(SUPPLY)) else {
+        return;
+    };
+    // The session came up at all, which is the negotiation working: one union
+    // `initialize` went out carrying both spellings, and the stub answering it
+    // with `protocolVersion: 2` selected the v2 stack.
+    pane.expect(&["stub-default"]);
+    let methods = pane.methods();
+    assert_reattached(&methods, "session/new", &["session/load", "session/resume"]);
+
+    // The panic this pins: v1's `McpServer::Stdio` is `#[serde(untagged)]` — no
+    // `type` key on the wire — and v2's is internally tagged, so re-serialising
+    // the v1 JSON as v2 died inside the connection's main_fn. The tokio task
+    // went away with the pane stuck at `starting runtime`, `session/new` never
+    // written, and no error on any channel. An untagged server here is that
+    // failure one deserialize away.
+    let servers = pane.request_params("session/new")["mcpServers"]
+        .as_array()
+        .expect("session/new carries mcpServers")
+        .clone();
+    assert_eq!(servers.len(), 2, "{servers:?}");
+    for server in &servers {
+        assert!(
+            server.get("type").is_some(),
+            "an MCP server with no transport tag cannot be read back as v2: {server}"
+        );
+    }
+    let stdio = servers
+        .iter()
+        .find(|server| server["type"] == "stdio")
+        .expect("the stdio server survives the crossing");
+    assert_eq!(stdio["name"], "crow-mcp");
+    assert_eq!(stdio["command"], "/bin/echo");
+    assert_eq!(stdio["args"], serde_json::json!(["mcp"]));
+    pane.assert_alive();
+}
+
+#[test]
+fn a_v2_prompt_reaches_the_pane_once() {
+    let Some(mut pane) = launch_with("v2-echo", &[], &V2_STUB, Some(SUPPLY)) else {
+        return;
+    };
+    pane.expect(&["stub-default"]);
+    pane.send("reply with exactly: PONG\r");
+    pane.expect(&["stub reply ok"]);
+    let screen = pane.text.clone();
+    // crow-term draws the user's line as it submits, and a v2 agent hands the
+    // same line straight back as a `user_message` update. Each is correct on
+    // its own; together they printed every prompt twice. The copy that has to
+    // survive is the replayed one, which arrives inside the resume window, so
+    // the live echo is dropped and this stays at one.
+    assert_eq!(
+        screen.matches("reply with exactly: PONG").count(),
+        1,
+        "the prompt is drawn once:\n{}",
+        pane.squeezed()
+    );
+    pane.assert_alive();
+}
+
+#[test]
+fn a_v2_turn_ends_on_the_idle_state_not_on_the_prompt_acknowledgement() {
+    let stub = [
+        ("STUB_PROTOCOL", "2"),
+        ("STUB_CAPS", "both"),
+        ("STUB_HOLD", "1"),
+    ];
+    let Some(mut pane) = launch_with("v2-hold", &[], &stub, Some(SUPPLY)) else {
+        return;
+    };
+    pane.expect(&["stub-default"]);
+    pane.send("do something slow\r");
+    pane.expect(&["working"]);
+    // `session/prompt` has been answered `{}` by now — the stub sends that
+    // before it says anything else, exactly as the real agent does. A client
+    // that read the acknowledgement as the result went idle right there, and
+    // idle is the one state esc does nothing in: no `session/cancel`, no
+    // `interrupted`, and the agent's turn left running with nobody watching it.
+    pane.send("\x1b");
+    pane.expect(&["interrupted"]);
+    assert!(
+        pane.methods().iter().any(|method| method == "session/cancel"),
+        "esc cancelled the turn that was still open: {:?}",
+        pane.methods()
+    );
+    pane.assert_alive();
+}
+
+#[test]
+fn a_v2_resume_repaints_the_transcript_the_agent_replays() {
+    let Some(mut pane) = launch_with("v2-resume", &STARTUP, &V2_STUB, Some(SUPPLY)) else {
+        return;
+    };
+    pane.expect(&[
+        "resumed coolname",
+        MODEL,
+        "an older prompt",
+        "the stub thinks in italics",
+        "replayed history line",
+        "print(6 * 7)",
+        "42",
+    ]);
+    let methods = pane.methods();
+    assert_reattached(&methods, "session/resume", &["session/load", "session/new"]);
+    // `replayFrom` is the reason v2 could drop `session/load`: the agent re-sends
+    // the transcript over the same update stream instead of the client reading a
+    // log it does not have.
+    assert_eq!(
+        pane.request_params("session/resume")["replayFrom"]["type"],
+        "start",
+        "resume asks for the transcript from the beginning"
+    );
+    assert_eq!(pane.model_requests(), vec![MODEL.to_owned()]);
+    // v2 renamed the option identifier and dropped the old key rather than
+    // aliasing it, so a client still writing `id` silently sets nothing.
+    let config = pane.request_params("session/set_config_option");
+    assert_eq!(config["configId"], "model");
+    assert!(config.get("id").is_none(), "v2 has no `id`: {config}");
+
+    let screen = pane.text.clone();
+    // The same `user_message` notification the live turn drops. Here it is the
+    // pane's only copy of the prompt, so the replay window has to let it
+    // through — and let it through once.
+    assert_eq!(
+        screen.matches("an older prompt").count(),
+        1,
+        "the replayed prompt is drawn once:\n{}",
+        pane.squeezed()
     );
     pane.assert_alive();
 }
