@@ -21,7 +21,7 @@
 //! reused as-is. Only the wire calls are v2's own.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 // v1's `SessionId` is crow-term's internal session-id currency: every shared
@@ -103,6 +103,48 @@ fn board_lock(board: &Arc<Mutex<TurnBoard>>) -> std::sync::MutexGuard<'_, TurnBo
     board.lock().unwrap_or_else(|error| error.into_inner())
 }
 
+fn replay_lock(window: &Arc<Mutex<ReplayWindow>>) -> std::sync::MutexGuard<'_, ReplayWindow> {
+    window.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// The sessions with a `session/resume` replay in flight.
+///
+/// crow-term echoes a prompt into the transcript the moment it sends one, and
+/// v1's parser never had a `user_message` arm to echo it a second time. v2's
+/// agent does send one, so forwarding it unconditionally printed every prompt
+/// twice. It cannot simply be dropped, though: a `session/resume` +
+/// `replayFrom` delivers the old transcript over this same `session/update`
+/// stream, ahead of the resume response, and there is no local log to read it
+/// back from the way v1's replay does. There the agent's copy is the only one.
+///
+/// Same discriminator, opposite answer — so the window between sending
+/// `session/resume` and getting its response is what tells them apart.
+#[derive(Default)]
+struct ReplayWindow(HashSet<String>);
+
+impl ReplayWindow {
+    fn begin(&mut self, session: &str) {
+        self.0.insert(session.to_string());
+    }
+
+    fn end(&mut self, session: &str) {
+        self.0.remove(session);
+    }
+
+    /// Should this update reach the transcript?
+    fn forwards(&self, update: &Value, session: &str) -> bool {
+        !is_user_echo(update) || self.0.contains(session)
+    }
+}
+
+/// Is this update the agent handing back a user prompt?
+fn is_user_echo(update: &Value) -> bool {
+    matches!(
+        update.get("sessionUpdate").and_then(Value::as_str),
+        Some("user_message" | "user_message_chunk")
+    )
+}
+
 /// v2's stop reasons in the words the UI already knows. `Other` is the
 /// extension arm v1's enum cannot represent, and it keeps the agent's own word
 /// instead of passing for success or collapsing into "unknown".
@@ -148,6 +190,8 @@ struct Stack {
     surface: Arc<Mutex<Surface>>,
     board: Arc<Mutex<TurnBoard>>,
     workspace: String,
+    /// Sessions with a `session/resume` replay in flight. See [`ReplayWindow`].
+    replaying: Arc<Mutex<ReplayWindow>>,
     /// Drops when the connection's main function returns, which is how a prompt
     /// task learns the child is gone. See [`closed`].
     alive: tokio::sync::watch::Receiver<bool>,
@@ -156,6 +200,17 @@ struct Stack {
 impl Stack {
     fn arm(&self, session: &str) -> tokio::sync::mpsc::UnboundedReceiver<TurnOutcome> {
         board_lock(&self.board).arm(session)
+    }
+
+    /// Mark a session as replaying for the window between sending
+    /// `session/resume` and getting its response, which is exactly the window
+    /// the agent replays the old transcript through.
+    fn begin_replay(&self, session: &str) {
+        replay_lock(&self.replaying).begin(session);
+    }
+
+    fn end_replay(&self, session: &str) {
+        replay_lock(&self.replaying).end(session);
     }
 
     /// Wait for the turn's idle, racing the connection's own lifetime.
@@ -474,12 +529,16 @@ async fn resume_session(
     let request = v2::ResumeSessionRequest::new(sid.to_string(), cwd.to_path_buf())
         .mcp_servers(crate::mcp_supply::wire_servers_v2())
         .replay_from(v2::ReplayFrom::Start(v2::ReplayFromStart::new()));
-    match stack
+    // Every replayed update arrives before this response, so the flag is up for
+    // exactly as long as the agent is replaying. See `user_echo`.
+    stack.begin_replay(&sid.0);
+    let resumed = stack
         .cx
         .send_request(request)
         .block_task_setup_deadline()
-        .await
-    {
+        .await;
+    stack.end_replay(&sid.0);
+    match resumed {
         Ok(setup) => {
             emit_session_bound(
                 &stack.bus,
@@ -661,9 +720,12 @@ pub(super) async fn connect(
     let surface = Arc::new(Mutex::new(Surface::default()));
     let board = Arc::new(Mutex::new(TurnBoard::default()));
 
+    let replaying = Arc::new(Mutex::new(ReplayWindow::default()));
+
     let bus_n = bus.clone();
     let surface_n = Arc::clone(&surface);
     let board_n = Arc::clone(&board);
+    let replaying_n = Arc::clone(&replaying);
     let bus_u = bus.clone();
     let surface_u = Arc::clone(&surface);
     let bus_p = bus.clone();
@@ -728,6 +790,13 @@ pub(super) async fn connect(
                                     session_id: Some(session.clone()),
                                     skills,
                                 }));
+                            }
+                        }
+                        // Claimed either way: an update this client drops is
+                        // still an update it answered.
+                        if let Some(update) = params.get("update") {
+                            if !replay_lock(&replaying_n).forwards(update, &session) {
+                                return Ok(Handled::Yes);
                             }
                         }
                         let _ = bus_n.send(AppEvent::Rpc {
@@ -833,6 +902,7 @@ pub(super) async fn connect(
             let bus = bus;
             let surface = Arc::clone(&surface);
             let board = Arc::clone(&board);
+            let replaying = Arc::clone(&replaying);
             let cfg = cfg;
             let negotiated = negotiated;
             async move {
@@ -892,6 +962,7 @@ pub(super) async fn connect(
                     surface: Arc::clone(&surface),
                     board,
                     workspace: cfg.workspace.clone(),
+                    replaying,
                     alive: alive_rx,
                 };
 

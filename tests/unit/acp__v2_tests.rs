@@ -230,3 +230,87 @@ fn a_poisoned_board_still_answers() {
     ));
     assert!(stops.try_recv().is_ok());
 }
+
+
+/// The bug this pins: a v2 agent echoes the prompt back as a `user_message`
+/// update, and crow-term had already put that line on screen when it sent it —
+/// so every prompt printed twice. It cannot simply be dropped, because a
+/// `session/resume` replay delivers the old transcript over the same stream and
+/// there the agent's copy is the only one.
+#[test]
+fn a_live_user_echo_is_dropped_and_a_replayed_one_is_kept() {
+    let user = json!({
+        "sessionUpdate": "user_message",
+        "messageId": "6e284e5302224f3eb739b46a67d4802b",
+        "content": [{ "text": "reply with exactly: PONG", "type": "text" }],
+    });
+    let mut window = ReplayWindow::default();
+
+    assert!(
+        !window.forwards(&user, "s1"),
+        "live, the pane already shows this line"
+    );
+    window.begin("s1");
+    assert!(
+        window.forwards(&user, "s1"),
+        "mid-replay it is the only copy there is"
+    );
+    window.end("s1");
+    assert!(
+        !window.forwards(&user, "s1"),
+        "the resume response closes the window, so the next prompt is live again"
+    );
+}
+
+#[test]
+fn the_replay_window_is_per_session() {
+    let user = json!({ "sessionUpdate": "user_message", "content": [{ "type": "text", "text": "hi" }] });
+    let mut window = ReplayWindow::default();
+    window.begin("resumed");
+    assert!(window.forwards(&user, "resumed"));
+    assert!(
+        !window.forwards(&user, "other"),
+        "a session that is not replaying still echoes locally"
+    );
+}
+
+/// Only the user's own prompt is gated. Everything else in a replay has to
+/// reach the transcript whether or not the window is open, and everything else
+/// live has to reach it too — gating the whole stream would blank the pane.
+#[test]
+fn nothing_but_a_user_echo_is_gated() {
+    let mut window = ReplayWindow::default();
+    for update in [
+        json!({ "sessionUpdate": "agent_message", "content": [{ "type": "text", "text": "PONG" }] }),
+        json!({ "sessionUpdate": "agent_thought", "content": [{ "type": "text", "text": "hmm" }] }),
+        json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "P" } }),
+        json!({ "sessionUpdate": "state_update", "state": "idle" }),
+        json!({ "sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed" }),
+        json!({ "sessionUpdate": "usage_update", "used": 1, "size": 2 }),
+        json!({ "sessionUpdate": "session_info_update", "title": "t" }),
+    ] {
+        assert!(
+            window.forwards(&update, "s1"),
+            "{} must forward with the window closed",
+            update["sessionUpdate"]
+        );
+        window.begin("s1");
+        assert!(
+            window.forwards(&update, "s1"),
+            "{} must forward with the window open",
+            update["sessionUpdate"]
+        );
+        window.end("s1");
+    }
+}
+
+/// v1 spells the same echo `user_message_chunk`; both are the agent handing
+/// back a prompt the client already wrote.
+#[test]
+fn both_user_echo_spellings_are_recognised() {
+    assert!(is_user_echo(&json!({ "sessionUpdate": "user_message" })));
+    assert!(is_user_echo(&json!({ "sessionUpdate": "user_message_chunk" })));
+    assert!(!is_user_echo(&json!({ "sessionUpdate": "agent_message" })));
+    assert!(!is_user_echo(&json!({ "sessionUpdate": "agent_thought_chunk" })));
+    assert!(!is_user_echo(&json!({})), "no discriminator is not an echo");
+}
