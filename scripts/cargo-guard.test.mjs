@@ -66,7 +66,10 @@ test('cargo guard status is read-only and reports the scoped target', () => {
   }
 })
 
-test('cargo guard cleans an oversized scoped target before running cargo', () => {
+// The scoped target is shared with `cargo build --release`. Cleaning it because
+// a test run grew the cache past the limit deletes a binary somebody is about
+// to test, so over-the-limit warns and pruning stays explicit.
+test('cargo guard warns about an oversized scoped target and leaves it alone', () => {
   const item = fixture()
   try {
     mkdirSync(item.target)
@@ -74,6 +77,28 @@ test('cargo guard cleans an oversized scoped target before running cargo', () =>
 
     const result = run(['test', '--locked'], item, {
       DSH_TUI_RUST_CACHE_MAX_GIB: '0',
+    })
+
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stderr, /over the cache limit/)
+    assert.deepEqual(readFileSync(item.log, 'utf8').trim().split('\n'), [
+      'test --locked',
+    ])
+    assert.equal(readFileSync(path.join(item.target, 'artifact'), 'utf8'), 'cache')
+  } finally {
+    rmSync(item.root, { recursive: true, force: true })
+  }
+})
+
+test('cargo guard cleans an oversized scoped target when autoclean is asked for', () => {
+  const item = fixture()
+  try {
+    mkdirSync(item.target)
+    writeFileSync(path.join(item.target, 'artifact'), 'cache')
+
+    const result = run(['test', '--locked'], item, {
+      DSH_TUI_RUST_CACHE_MAX_GIB: '0',
+      DSH_TUI_RUST_CACHE_AUTOCLEAN: '1',
     })
 
     assert.equal(result.status, 0, result.stderr)

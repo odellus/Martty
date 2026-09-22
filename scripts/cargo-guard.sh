@@ -8,6 +8,10 @@ cargo_bin=${DSH_TUI_CARGO_BIN:-cargo}
 max_gib=${DSH_TUI_RUST_CACHE_MAX_GIB:-20}
 min_free_gib=${DSH_TUI_RUST_DISK_MIN_GIB:-10}
 allow_external=${DSH_TUI_CARGO_ALLOW_EXTERNAL_TARGET:-0}
+# Off by default. `cargo clean` on a shared target dir takes the release binary
+# with it, and a build somebody is about to test is not cache. Over the limit
+# warns; pruning is something you ask for, with `prune` or this flag.
+autoclean=${DSH_TUI_RUST_CACHE_AUTOCLEAN:-0}
 
 case "$max_gib" in
   ''|*[!0-9]*)
@@ -102,7 +106,11 @@ esac
 if [ "$size_kib" -gt "$max_kib" ] \
   || { [ "$size_kib" -gt 0 ] && [ "$available_kib" -lt "$min_free_kib" ]; }; then
   show_status >&2
-  clean_target
+  if [ "$autoclean" = 1 ]; then
+    clean_target
+  else
+    echo "cargo-guard: over the cache limit; run 'scripts/cargo-guard.sh prune' to reclaim it (set DSH_TUI_RUST_CACHE_AUTOCLEAN=1 to make that automatic)" >&2
+  fi
 fi
 
 cd "$project_root"
