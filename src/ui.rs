@@ -2487,50 +2487,48 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         area.width.saturating_sub(2),
         area.height,
     );
-    let mut owners: Vec<Option<usize>> = Vec::new();
-    let mut banner_count;
-    let mut lines = if app.show_banner {
-        let banner = banner_lines(app, inner.width);
-        banner_count = banner.len();
-        owners.resize(banner_count, None);
-        banner
-    } else {
-        banner_count = 0;
-        Vec::new()
-    };
+    let h = inner.height as usize;
     let thumbs = crate::pet::kitty_supported();
     let spinner = app.spinner();
     let tone = app.tone_mode;
-    let layout = app
-        .displayed_transcript_mut()
-        .layout(&theme, tone, inner.width, spinner, thumbs);
-    if app.show_banner && lines.len() < inner.height as usize {
-        let remaining = inner.height as usize - lines.len();
-        let top = remaining / 2;
-        let bottom = remaining - top;
-        let mut centered_lines = Vec::with_capacity(inner.height as usize);
-        centered_lines.resize(top, Line::default());
-        centered_lines.append(&mut lines);
-        centered_lines.resize(centered_lines.len() + bottom, Line::default());
-        lines = centered_lines;
-        owners.resize(lines.len(), None);
-        banner_count = lines.len();
-    }
-    if !app.show_banner {
-        lines.extend(layout.lines);
-        owners.extend(layout.owners);
-    }
+
+    // Height first, lines second. The scroll window cannot be resolved without
+    // the transcript's total row count, and *measuring* that costs two integer
+    // compares per cell (`Transcript::measure`) where *laying it out* costs a
+    // clone of every styled line in the session. That clone is what made the
+    // composer lag on every keystroke once a session ran long: `Term(_)` events
+    // force an immediate frame, so each character paid for the whole scrollback.
+    // Only the cells intersecting the resolved window are materialized below.
+    //
+    // The banner owns the pane until the first real prompt and the transcript is
+    // not painted alongside it, so in that mode none of it is measured either.
+    let banner = if app.show_banner {
+        let mut b = banner_lines(app, inner.width);
+        if b.len() < h {
+            let remaining = h - b.len();
+            let top = remaining / 2;
+            let bottom = remaining - top;
+            let mut centered = Vec::with_capacity(h);
+            centered.resize(top, Line::default());
+            centered.append(&mut b);
+            centered.resize(centered.len() + bottom, Line::default());
+            b = centered;
+        }
+        Some(b)
+    } else {
+        None
+    };
+    let body_rows = match &banner {
+        Some(b) => b.len(),
+        None => app
+            .displayed_transcript_mut()
+            .row_count(&theme, tone, inner.width, spinner, thumbs),
+    };
     // Active work rides as the transcript's last line — hugging the newest
     // message (no separator; it scrolls with the list). Idle draws nothing.
-    if !app.show_banner {
-        if let Some(line) = state_line(app) {
-            lines.push(line);
-            owners.push(None);
-        }
-    }
+    let state = if banner.is_none() { state_line(app) } else { None };
+    let total = body_rows + usize::from(state.is_some());
 
-    let total = lines.len();
-    let h = inner.height as usize;
     let max_scroll = total.saturating_sub(h);
     let (start, end) = if app.scroll_up == 0 {
         app.chat_view.manual_top = None;
@@ -2551,37 +2549,91 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         (start, end)
     };
 
+    // Now that the window is known, materialize exactly the cells it touches.
+    // Reported line numbers stay absolute, so `users`/`images` mean the same
+    // thing here as they do in a full `Transcript::layout`.
+    let banner_owners: Vec<Option<usize>>;
+    let windowed = if banner.is_none() {
+        Some(app.displayed_transcript_mut().layout_window(
+            &theme,
+            tone,
+            inner.width,
+            spinner,
+            thumbs,
+            start.min(body_rows),
+            end.min(body_rows),
+        ))
+    } else {
+        None
+    };
+    let (all_rows, all_owners, base): (&[Line<'static>], &[Option<usize>], usize) =
+        match (&banner, &windowed) {
+            (Some(b), _) => {
+                banner_owners = vec![None; b.len()];
+                (b.as_slice(), &banner_owners[..], 0)
+            }
+            (None, Some((layout, _, base))) => {
+                (layout.lines.as_slice(), layout.owners.as_slice(), *base)
+            }
+            (None, None) => (&[], &[], 0),
+        };
+    // The state line is not part of the transcript, so the materialized rows
+    // stop at `body_rows`; it is painted separately below.
+    let vis_end = end.min(body_rows);
+    let lo = start.min(vis_end).saturating_sub(base).min(all_rows.len());
+    let hi = vis_end.saturating_sub(base).clamp(lo, all_rows.len());
+    let rows = &all_rows[lo..hi];
+    let owners = &all_owners[lo..hi];
+
     // Layout snapshot for mouse selection: hit-testing and copy extraction
     // read exactly what this frame showed (grok-build's resolved selection
     // model, scaled down to plain text per wrapped line). Viewport-sized
     // only (L25): the absolute→relative seam lives in
     // `ChatView::line_text`/`line_owner`; `total` keeps scroll math whole.
+    let shown = end - start;
+    let state_row = body_rows.saturating_sub(start);
+    let state_shown = state.is_some() && end > body_rows && state_row < shown;
     app.chat_view.area = inner;
     app.chat_view.top = start;
     app.chat_view.total = total;
-    app.chat_view.lines = lines[start..end]
+    app.chat_view.lines = rows
         .iter()
         .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect())
         .collect();
-    app.chat_view.owners = owners[start..end].to_vec();
+    app.chat_view.owners = owners.to_vec();
+    if state_shown {
+        let line = state.as_ref().expect("state_shown");
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        app.chat_view.lines.resize(state_row, String::new());
+        app.chat_view.lines.push(text);
+        app.chat_view.owners.resize(state_row, None);
+        app.chat_view.owners.push(None);
+    }
     // The ↥ jump flash (issue #103): resolve the flashing transcript cell
     // to its current line span every frame — streaming can move the prompt
-    // — and drop it once the 5 s window expired.
+    // — and drop it once the 5 s window expired. A prompt scrolled out of the
+    // window is not materialized, so it simply does not flash.
     app.prompt_flash_lines = app
         .prompt_flash
         .as_ref()
         .filter(|(_, until)| std::time::Instant::now() < *until)
-        .and_then(|(cell, _)| layout.users.iter().find(|p| p.cell == *cell))
+        .and_then(|(cell, _)| {
+            windowed
+                .as_ref()
+                .and_then(|(layout, _, _)| layout.users.iter().find(|p| p.cell == *cell))
+        })
         .map(|prompt| (prompt.line, prompt.end));
 
-    // Visible image thumbnails → screen rects (banner lines shift transcript
-    // line indices; partially visible thumbnails clip to the pane).
-    app.chat_view.images = layout
-        .images
+    // Visible image thumbnails → screen rects (partially visible thumbnails
+    // clip to the pane). `shot.line` is absolute, so the window's own offset
+    // is already accounted for.
+    app.chat_view.images = windowed
+        .as_ref()
+        .map(|(layout, _, _)| layout.images.as_slice())
+        .unwrap_or(&[])
         .iter()
         .filter_map(|shot| {
-            let abs = banner_count + shot.line;
-            let rel = abs as isize - start as isize;
+            let rel = shot.line as isize - start as isize;
             if rel < 0 || rel as usize >= h {
                 return None;
             }
@@ -2598,10 +2650,23 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    // Zero-copy render (B): the widget borrows the frame's assembled
-    // window — no per-frame `to_vec` of the viewport on top of the
-    // snapshot above.
-    f.render_widget(LinesWindow { lines: &lines[start..end] }, inner);
+    // Zero-copy render: the widget borrows the materialized window, and the
+    // state line is painted into its own single row rather than being appended
+    // to a cloned Vec.
+    if !rows.is_empty() {
+        let rows_area = Rect::new(inner.x, inner.y, inner.width, rows.len() as u16);
+        f.render_widget(LinesWindow { lines: rows }, rows_area);
+    }
+    if state_shown {
+        let line = state.as_ref().expect("state_shown");
+        let row = Rect::new(inner.x, inner.y + state_row as u16, inner.width, 1);
+        f.render_widget(
+            LinesWindow {
+                lines: std::slice::from_ref(line),
+            },
+            row,
+        );
+    }
     // The transient ↥ jump wash paints under an active copy-selection so
     // the user's own highlight always wins.
     draw_prompt_flash(f, app, inner, start);

@@ -6,6 +6,7 @@
 //! outcomes.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -103,18 +104,33 @@ pub struct Cell {
     /// Cached body render for the wrap/markdown-heavy kinds. Headers stay
     /// outside the cache: they depend on the per-frame spinner and are cheap.
     render: Option<CellRender>,
+    /// Cached row count under the layout inputs it was measured for. Written
+    /// by the emitter itself (`layout_cells` records `out.len() - first`), so
+    /// measuring a cell and painting it can never disagree. This is what lets
+    /// the windowed path know a cell's height without materializing its lines.
+    rows: Option<(LayoutKey, usize)>,
+}
+
+/// The layout inputs a cached row count or body render was built for. One key
+/// type for both, so a cell can never hold a body measured for one width and a
+/// row count for another.
+#[derive(Clone, Copy, PartialEq)]
+struct LayoutKey {
+    version: u64,
+    width: u16,
+    theme: Theme,
+    tone: ToneMode,
+    /// The *effective* expansion, i.e. including the transcript-wide
+    /// `collapse_all`; it decides Tool/Shell/Reasoning layout.
+    expanded: bool,
+    thumbs: bool,
+    locale: Locale,
 }
 
 /// Cached body lines of one cell plus the layout inputs they were built for.
 /// Body lines never depend on the spinner, so a spinning UI reuses them.
 struct CellRender {
-    version: u64,
-    width: u16,
-    theme: Theme,
-    tone: ToneMode,
-    expanded: bool,
-    thumbs: bool,
-    locale: Locale,
+    key: LayoutKey,
     /// Lines below the cell header, in paint order, fully styled.
     body: Vec<Line<'static>>,
     /// Kind-specific count needed by the per-frame header: Tool cells carry
@@ -125,6 +141,23 @@ struct CellRender {
     /// leaves the one-line title out of the header rather than saying the
     /// same thing twice.
     has_command: bool,
+}
+
+/// Cached row prefix-sum over the cells: `sums[i]` is the number of laid-out
+/// rows before cell `i`, so `sums[cells.len()]` is the transcript height and an
+/// absolute line index maps back to its cell by binary search. `stamps[i]` is
+/// the `(version, effective expanded)` that `sums[i + 1] - sums[i]` was
+/// measured from — two integer compares per cell per frame, which is what keeps
+/// the height of a 100k-row session cheap to know without laying any of it out.
+struct Measure {
+    width: u16,
+    theme: Theme,
+    tone: ToneMode,
+    thumbs: bool,
+    locale: Locale,
+    collapse_all: bool,
+    stamps: Vec<(u64, bool)>,
+    sums: Vec<usize>,
 }
 
 /// What one `build_body` pass produced: the cacheable lines plus the two facts
@@ -157,6 +190,7 @@ impl Cell {
             hidden: false,
             version: 0,
             render: None,
+            rows: None,
         }
     }
 
@@ -164,49 +198,45 @@ impl Cell {
         self.version = self.version.wrapping_add(1);
     }
 
-    /// Return the cached body render, rebuilding it when the cell content
-    /// version or any layout input (width/theme/tone/expanded/thumbs/locale)
-    /// drifted. `expanded` is the *effective* value including the
-    /// transcript-wide `collapse_all`; it decides Tool/Shell/Reasoning layout.
-    fn ensure_render(
-        &mut self,
+    /// The cache key for this cell under the given layout inputs. `expanded`
+    /// is the *effective* value including the transcript-wide `collapse_all`.
+    fn key(
+        &self,
         theme: &Theme,
         tone: ToneMode,
         width: u16,
         expanded: bool,
         thumbs: bool,
         locale: Locale,
-    ) -> &CellRender {
-        let stale = match &self.render {
-            Some(r) => {
-                r.version != self.version
-                    || r.width != width
-                    || r.theme != *theme
-                    || r.tone != tone
-                    || r.expanded != expanded
-                    || r.thumbs != thumbs
-                    || r.locale != locale
-            }
-            None => true,
-        };
+    ) -> LayoutKey {
+        LayoutKey {
+            version: self.version,
+            width,
+            theme: *theme,
+            tone,
+            expanded,
+            thumbs,
+            locale,
+        }
+    }
+
+    /// Return the cached body render, rebuilding it when the cell content
+    /// version or any layout input (width/theme/tone/expanded/thumbs/locale)
+    /// drifted.
+    fn ensure_render(&mut self, key: LayoutKey) -> &CellRender {
+        let stale = self.render.as_ref().is_none_or(|r| r.key != key);
         if stale {
             let built = build_body(
                 &self.kind,
-                theme,
-                tone,
-                width as usize,
-                expanded,
-                thumbs,
-                locale,
+                &key.theme,
+                key.tone,
+                key.width as usize,
+                key.expanded,
+                key.thumbs,
+                key.locale,
             );
             self.render = Some(CellRender {
-                version: self.version,
-                width,
-                theme: *theme,
-                tone,
-                expanded,
-                thumbs,
-                locale,
+                key,
                 body: built.lines,
                 meta: built.meta,
                 has_command: built.has_command,
@@ -525,6 +555,9 @@ pub struct Transcript {
     /// steer echoes) carry the generation they were pushed in, so stale
     /// indexes can never land in a freshly cleared transcript.
     gen: u64,
+    /// Row prefix-sum cache; see `Measure`. Dropped whenever the layout inputs
+    /// drift or the cell count changes.
+    measure: Option<Measure>,
 }
 
 impl Transcript {
@@ -550,6 +583,7 @@ impl Transcript {
             collapse_all: false,
             locale: Locale::default(),
             gen: 0,
+            measure: None,
         }
     }
 
@@ -651,6 +685,9 @@ impl Transcript {
         for &index in cells {
             if let Some(cell) = self.cells.get_mut(index) {
                 cell.hidden = true;
+                // Hiding changes the row count, so the measure cache has to
+                // see it as a content change.
+                cell.bump();
             }
         }
     }
@@ -1198,17 +1235,178 @@ impl Transcript {
         spinner: char,
         thumbs: bool,
     ) -> TranscriptLayout {
+        let end = self.cells.len();
+        self.layout_cells(theme, tone, width, spinner, thumbs, 0..end, 0)
+    }
+
+    /// Total laid-out row count, refreshing the cached prefix-sum on the way.
+    /// A cell whose content version and effective expansion are unchanged costs
+    /// two integer compares; only drifted cells get laid out, and only to count
+    /// their rows. This is the cheap half of the viewport split — `draw_chat`
+    /// needs the height to resolve its scroll window before it can know which
+    /// cells are worth painting.
+    fn measure(
+        &mut self,
+        theme: &Theme,
+        tone: ToneMode,
+        width: u16,
+        spinner: char,
+        thumbs: bool,
+    ) -> usize {
+        let width = width.max(8);
+        let n = self.cells.len();
+        let collapse_all = self.collapse_all;
+        let locale = self.locale;
+        // Take the table out so the rebuild loop can borrow `self` mutably.
+        let mut table = self.measure.take();
+        let reusable = table.as_ref().is_some_and(|m| {
+            m.width == width
+                && m.theme == *theme
+                && m.tone == tone
+                && m.thumbs == thumbs
+                && m.locale == locale
+                && m.collapse_all == collapse_all
+                && m.stamps.len() == n
+        });
+        let mut t = if reusable {
+            table.take().expect("reusable table")
+        } else {
+            Measure {
+                width,
+                theme: *theme,
+                tone,
+                thumbs,
+                locale,
+                collapse_all,
+                // A stamp no cell can match, so every entry reads as dirty.
+                stamps: vec![(u64::MAX, false); n],
+                sums: vec![0; n + 1],
+            }
+        };
+        t.stamps.resize(n, (u64::MAX, false));
+        t.sums.resize(n + 1, 0);
+        // Sums before the first drifted cell are still valid, so the rebuild
+        // starts there — a streaming tail re-measures one cell, not the lot.
+        let dirty = (0..n)
+            .find(|&ci| {
+                t.stamps[ci] != (self.cells[ci].version, self.cells[ci].expanded && !collapse_all)
+            })
+            .unwrap_or(n);
+        for ci in dirty..n {
+            let expanded = self.cells[ci].expanded && !collapse_all;
+            let stamp = (self.cells[ci].version, expanded);
+            let cached = self.cells[ci].rows.as_ref().and_then(|(k, rows)| {
+                (k.version == stamp.0
+                    && k.width == width
+                    && k.theme == *theme
+                    && k.tone == tone
+                    && k.expanded == expanded
+                    && k.thumbs == thumbs
+                    && k.locale == locale)
+                    .then_some(*rows)
+            });
+            let rows = match cached {
+                Some(rows) => rows,
+                // Cold at this width/theme/expansion: lay the one cell out to
+                // count it. `layout_cells` records the count as it emits, so
+                // the next frame reads it instead of rebuilding.
+                None => self
+                    .layout_cells(theme, tone, width, spinner, thumbs, ci..ci + 1, 0)
+                    .lines
+                    .len(),
+            };
+            t.sums[ci + 1] = t.sums[ci] + rows;
+            t.stamps[ci] = stamp;
+        }
+        let total = t.sums[n];
+        self.measure = Some(t);
+        total
+    }
+
+    /// Total laid-out row count without materializing any of them. The chat
+    /// pane needs this to resolve its scroll window before it can know which
+    /// cells are worth painting; see `measure`.
+    pub fn row_count(
+        &mut self,
+        theme: &Theme,
+        tone: ToneMode,
+        width: u16,
+        spinner: char,
+        thumbs: bool,
+    ) -> usize {
+        self.measure(theme, tone, width, spinner, thumbs)
+    }
+
+    /// Lay out only the cells intersecting the absolute line window
+    /// `start..end`. Returns the layout, the transcript's total row count, and
+    /// `base` — the absolute line the returned `lines[0]` sits at, so the caller
+    /// slices `lines[start - base..end - base]` for the screen. Reported
+    /// `users`/`images` line numbers stay absolute, exactly as in `layout`.
+    pub fn layout_window(
+        &mut self,
+        theme: &Theme,
+        tone: ToneMode,
+        width: u16,
+        spinner: char,
+        thumbs: bool,
+        start: usize,
+        end: usize,
+    ) -> (TranscriptLayout, usize, usize) {
+        let total = self.measure(theme, tone, width, spinner, thumbs);
+        let n = self.cells.len();
+        // `sums` is non-decreasing, so both ends of the cell range come from a
+        // binary search rather than a walk.
+        let (first, last, base) = {
+            let sums = &self.measure.as_ref().expect("measured").sums;
+            // First cell owning a row at or after `start`: the cell before the
+            // first prefix that exceeds it.
+            let lo = sums.partition_point(|&s| s <= start);
+            let first = lo.saturating_sub(1).min(n);
+            // First cell starting at or after `end` — the exclusive upper bound.
+            let last = sums.partition_point(|&s| s < end).clamp(first, n);
+            let base = if first < n { sums[first] } else { total };
+            (first, last, base)
+        };
+        let layout = self.layout_cells(theme, tone, width, spinner, thumbs, first..last, base);
+        (layout, total, base)
+    }
+
+    /// Lay out only `range`'s cells, numbering every reported line index from
+    /// `base_line`. This is the whole viewport story: the chat pane needs the
+    /// *height* of the transcript to resolve its scroll window, but only the
+    /// *lines* of the cells that intersect it. `measure` supplies the heights
+    /// from the per-cell row cache this function fills in as it emits, so a
+    /// frame paints ~one screenful of cells no matter how long the session is.
+    ///
+    /// `owners` values are cell indexes (already absolute); `users`/`images`
+    /// line numbers are absolute transcript lines, so a windowed layout and a
+    /// full one report the same coordinates.
+    fn layout_cells(
+        &mut self,
+        theme: &Theme,
+        tone: ToneMode,
+        width: u16,
+        spinner: char,
+        thumbs: bool,
+        range: Range<usize>,
+        base_line: usize,
+    ) -> TranscriptLayout {
         let width = width.max(8) as usize;
         let collapse_all = self.collapse_all;
+        let locale = self.locale;
         let mut out: Vec<Line> = Vec::new();
         let mut owners: Vec<Option<usize>> = Vec::new();
         let mut images: Vec<ImageShot> = Vec::new();
         let mut users: Vec<UserPromptLine> = Vec::new();
-        for (ci, cell) in self.cells.iter_mut().enumerate() {
+        for ci in range {
+            let cell = &mut self.cells[ci];
+            let expanded = cell.expanded && !collapse_all;
+            let key = cell.key(theme, tone, width as u16, expanded, thumbs, locale);
+            let cell_first = out.len();
             if cell.hidden {
+                cell.rows = Some((key, 0));
                 continue;
             }
-            let expanded = cell.expanded && !collapse_all;
             // Wrap/markdown-heavy kinds paint their body lines from the
             // per-cell render cache (see `Cell::ensure_render`); headers stay
             // live so the spinner keeps turning without re-wrapping bodies.
@@ -1219,8 +1417,12 @@ impl Transcript {
                     | CellKind::Tool { .. }
                     | CellKind::Shell { .. }
             ) {
-                cell.ensure_render(theme, tone, width as u16, expanded, thumbs, self.locale);
+                cell.ensure_render(key);
             }
+            // A cell that emits nothing (empty assistant text, empty plan)
+            // still has to record its zero height, so it breaks out of the
+            // block rather than continuing the loop.
+            'cell: {
             match &cell.kind {
                 CellKind::User { text, queued } => {
                     emit(&mut out, &mut owners, Line::default(), None);
@@ -1255,8 +1457,8 @@ impl Transcript {
                     }
                     users.push(UserPromptLine {
                         cell: ci,
-                        line: first,
-                        end: out.len(),
+                        line: base_line + first,
+                        end: base_line + out.len(),
                     });
                 }
                 CellKind::Image {
@@ -1311,7 +1513,7 @@ impl Transcript {
                             }
                             images.push(ImageShot {
                                 id: *id,
-                                line,
+                                line: base_line + line,
                                 rows,
                                 cols,
                                 data: data.clone(),
@@ -1340,8 +1542,8 @@ impl Transcript {
                     }
                     users.push(UserPromptLine {
                         cell: ci,
-                        line: first,
-                        end: out.len(),
+                        line: base_line + first,
+                        end: base_line + out.len(),
                     });
                 }
                 CellKind::Reasoning {
@@ -1403,7 +1605,7 @@ impl Transcript {
                     text, done, agent, ..
                 } => {
                     if text.trim().is_empty() {
-                        continue;
+                        break 'cell;
                     }
                     emit(&mut out, &mut owners, Line::default(), None);
                     if let Some(a) = agent {
@@ -1545,12 +1747,10 @@ impl Transcript {
                 }
                 CellKind::Plan { summary } => {
                     if summary.is_empty() {
-                        continue;
+                        break 'cell;
                     }
                     for l in wrap(
-                        &self
-                            .locale
-                            .trf("plan · {}", "计划 · {}", &[summary.clone()]),
+                        &locale.trf("plan · {}", "计划 · {}", &[summary.clone()]),
                         width.saturating_sub(2),
                     ) {
                         emit(
@@ -1583,6 +1783,8 @@ impl Transcript {
                     }
                 }
             }
+            }
+            cell.rows = Some((key, out.len() - cell_first));
         }
         TranscriptLayout {
             lines: out,

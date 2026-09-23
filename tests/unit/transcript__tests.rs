@@ -844,3 +844,210 @@ fn a_command_that_arrives_fenced_frames_once_and_keeps_its_output() {
     assert!(p.contains("print(6 * 7)"), "the title still says what ran: {p}");
     assert!(!p.contains("```"), "and never the markers: {p}");
 }
+
+
+/// A transcript covering every `CellKind`, so the measure/layout/window
+/// invariants are checked against all of them rather than whichever one a
+/// narrower fixture happened to build.
+fn fixture() -> Transcript {
+    let mut tr = t("s");
+    tr.push_user("short prompt".into(), false);
+    tr.apply(UiEvent::AssistantFinal {
+        session: "s".into(),
+        text: "## Heading\n\nProse that wraps over a couple of rows.\n\n- one\n- two\n\n```rust\nfn f() {}\n```".into(),
+        model: Some("m".into()),
+    });
+    tr.apply(UiEvent::ReasoningDelta {
+        session: "s".into(),
+        text: "thinking about it\n".into(),
+    });
+    tr.apply(UiEvent::ToolCall {
+        session: "s".into(),
+        call_id: "c1".into(),
+        name: "bash".into(),
+        arguments: r#"{"command":"cargo test --locked"}"#.into(),
+    });
+    tr.apply(UiEvent::ToolResult {
+        session: "s".into(),
+        call_id: "c1".into(),
+        is_error: false,
+        text: (0..30).map(|k| format!("line {k} of tool output")).collect::<Vec<_>>().join("\n"),
+        error: None,
+    });
+    tr.apply(UiEvent::ToolCall {
+        session: "s".into(),
+        call_id: "c2".into(),
+        name: "read".into(),
+        arguments: r#"{"path":"src/app.rs"}"#.into(),
+    });
+    tr.apply(UiEvent::ToolResult {
+        session: "s".into(),
+        call_id: "c2".into(),
+        is_error: true,
+        text: "boom".into(),
+        error: Some("permission denied".into()),
+    });
+    let shell = tr.push_shell("ls -la".into());
+    tr.finish_shell(shell, Some(1), "ls: cannot access\n".repeat(20), tr.gen());
+    tr.apply(UiEvent::UserInjected {
+        session: "s".into(),
+        source: "AGENTS.md".into(),
+        preview: "injected context preview".into(),
+    });
+    tr.apply(UiEvent::Plan {
+        session: "s".into(),
+        summary: "step one; step two; step three".into(),
+    });
+    tr.apply(UiEvent::SessionNotice {
+        session: "s".into(),
+        severity: "warning".into(),
+        title: "heads up".into(),
+        details: Some("something happened".into()),
+    });
+    tr.push_user("a much longer prompt ".repeat(6).trim().to_string(), true);
+    tr.apply(UiEvent::AssistantFinal {
+        session: "s".into(),
+        text: "done".into(),
+        model: Some("m".into()),
+    });
+    tr.cancel_open_work();
+    tr
+}
+
+/// Every window `layout_window` reports must be byte-identical to the same
+/// slice of a full `layout`, and `row_count` must equal the full length — the
+/// measure cache and the emitter cannot be allowed to drift, because the scroll
+/// window is resolved from one and painted from the other.
+#[test]
+fn windowed_layout_matches_the_full_layout_slice() {
+    let theme = Theme::dark();
+    for width in [8u16, 23, 40, 80, 100] {
+        for collapse in [false, true] {
+            for thumbs in [false, true] {
+                let mut tr = fixture();
+                tr.collapse_all = collapse;
+                let full = tr.layout(&theme, crate::markdown::ToneMode::Single, width, '⠋', thumbs);
+                let total = full.lines.len();
+                assert_eq!(
+                    tr.row_count(&theme, crate::markdown::ToneMode::Single, width, '⠋', thumbs),
+                    total,
+                    "row_count != layout len (width {width} collapse {collapse} thumbs {thumbs})"
+                );
+                let mut starts = vec![0usize, 1, total / 3, total / 2, total.saturating_sub(5), total];
+                starts.extend((0..total).step_by(total.div_ceil(17).max(1)));
+                for &start in &starts {
+                    for &len in &[0usize, 1, 3, 7, 20] {
+                        let end = (start + len).min(total);
+                        let (w, w_total, base) = tr.layout_window(
+                            &theme,
+                            crate::markdown::ToneMode::Single,
+                            width,
+                            '⠋',
+                            thumbs,
+                            start,
+                            end,
+                        );
+                        let ctx = format!(
+                            "width {width} collapse {collapse} thumbs {thumbs} start {start} end {end}"
+                        );
+                        assert_eq!(w_total, total, "total {ctx}");
+                        assert!(base <= start, "base {base} past start {start}: {ctx}");
+                        let lo = start - base;
+                        let hi = end - base;
+                        assert!(hi <= w.lines.len(), "window too short: {ctx}");
+                        assert_eq!(&w.lines[lo..hi], &full.lines[start..end], "lines {ctx}");
+                        assert_eq!(
+                            &w.owners[lo..hi],
+                            &full.owners[start..end],
+                            "owners {ctx}"
+                        );
+                        // Absolute coordinates: every reported prompt/image must
+                        // be the very same entry the full layout reported.
+                        for p in &w.users {
+                            assert!(
+                                full.users.iter().any(|f| f.cell == p.cell
+                                    && f.line == p.line
+                                    && f.end == p.end),
+                                "user prompt {p:?} not in the full layout: {ctx}"
+                            );
+                        }
+                        for s in &w.images {
+                            assert!(
+                                full.images.iter().any(|f| f.id == s.id && f.line == s.line),
+                                "image {} not in the full layout: {ctx}",
+                                s.id
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The point of the window: a viewport-sized slice of a long session must not
+/// materialize the session. Asserted structurally (rows emitted, not wall
+/// clock) so it cannot flake.
+#[test]
+fn windowed_layout_materializes_only_the_window() {
+    let theme = Theme::dark();
+    let mut tr = t("s");
+    for i in 0..400 {
+        tr.push_user(format!("prompt {i}"), false);
+        tr.apply(UiEvent::AssistantFinal {
+            session: "s".into(),
+            text: format!("## {i}\n\n{}\n", "answer prose that wraps over rows. ".repeat(8)),
+            model: Some("m".into()),
+        });
+    }
+    let total = tr.row_count(&theme, crate::markdown::ToneMode::Single, 100, ' ', false);
+    assert!(total > 2000, "fixture should be long, got {total}");
+    let (w, _, base) =
+        tr.layout_window(&theme, crate::markdown::ToneMode::Single, 100, ' ', false, total - 40, total);
+    // 40 rows of viewport, plus at most the one cell it starts inside.
+    assert!(
+        w.lines.len() <= 40 + 60,
+        "window materialized {} rows for a 40-row viewport (base {base}, total {total})",
+        w.lines.len()
+    );
+}
+
+/// A cell's cached row count must survive being measured through the window
+/// path and then read back by the full path — and vice versa — without either
+/// answer changing.
+#[test]
+fn measure_cache_survives_mutation_and_resize() {
+    let theme = Theme::dark();
+    let tone = crate::markdown::ToneMode::Single;
+    let mut tr = fixture();
+    for width in [40u16, 80, 40, 120] {
+        let full = tr.layout(&theme, tone, width, ' ', false);
+        assert_eq!(tr.row_count(&theme, tone, width, ' ', false), full.lines.len());
+        // A window pass must not disturb the cached heights.
+        let half = full.lines.len() / 2;
+        let _ = tr.layout_window(&theme, tone, width, ' ', false, half, half + 10);
+        assert_eq!(tr.row_count(&theme, tone, width, ' ', false), full.lines.len());
+    }
+    // Streaming into the tail invalidates one stamp, not the table.
+    let before = tr.row_count(&theme, tone, 80, ' ', false);
+    tr.apply(UiEvent::TextDelta {
+        session: "s".into(),
+        text: "\n\nmore\n".into(),
+    });
+    let after = tr.row_count(&theme, tone, 80, ' ', false);
+    assert_eq!(after, tr.layout(&theme, tone, 80, ' ', false).lines.len());
+    assert!(after >= before, "growing the tail shrank the transcript");
+    // Collapse changes heights; the table has to follow.
+    tr.collapse_all = true;
+    assert_eq!(
+        tr.row_count(&theme, tone, 80, ' ', false),
+        tr.layout(&theme, tone, 80, ' ', false).lines.len()
+    );
+    // Hiding a cell drops its rows.
+    let hidden = tr.row_count(&theme, tone, 80, ' ', false);
+    let gen = tr.gen();
+    tr.hide_cells(&[0, 1], gen);
+    let after_hide = tr.row_count(&theme, tone, 80, ' ', false);
+    assert!(after_hide < hidden, "hiding cells did not shrink the transcript");
+    assert_eq!(after_hide, tr.layout(&theme, tone, 80, ' ', false).lines.len());
+}
