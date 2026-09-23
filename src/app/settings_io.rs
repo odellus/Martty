@@ -1,8 +1,8 @@
 //! settings_io: extracted verbatim from src/app.rs (Phase 1 split).
 
 use super::*;
-use std::io::{BufReader, Read, Write};
 
+/// The settings document to patch: the parsed file when it is an object,
 /// otherwise `{}`.
 ///
 /// The same file carries compositor-owned keys (`uiPreset`, the harness recipes)

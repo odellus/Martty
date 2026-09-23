@@ -1,9 +1,9 @@
 //! staging: extracted verbatim from src/app.rs (Phase 1 split).
 
 use super::*;
-use crate::bus::{permission_ask_default_sel, AppEvent, Cmd, CtlEvent, PermissionAskOption, PermissionAskReply, SessionListItem};
-use crate::locale::{Locale, UiSettings};
-use crate::transcript::{clamp_str, NoticeLevel, Transcript};
+use crate::bus::SessionListItem;
+use crate::locale::Locale;
+use crate::transcript::{clamp_str, Transcript};
 
 pub(crate) fn ui_session(event: &crate::events::UiEvent) -> Option<&str> {
     use crate::events::UiEvent;

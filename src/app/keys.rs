@@ -1,8 +1,7 @@
 //! keys: extracted verbatim from src/app.rs (Phase 1 split).
 
-use super::*;
 use std::time::{Duration, Instant};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 #[derive(Clone, Copy)]
 pub(crate) struct CtrlCQuitChord {
@@ -13,7 +12,7 @@ pub(crate) struct CtrlCQuitChord {
 pub(crate) const TIP_TTL: Duration = Duration::from_secs(4);
 /// How long the `↥` jump flash keeps the jumped user prompt background-
 /// washed before it restores to normal (issue #103).
-pub(crate) const PROMPT_FLASH_TTL: Duration = Duration::from_secs(5);
+pub const PROMPT_FLASH_TTL: Duration = Duration::from_secs(5);
 /// How often the composer cap re-checks the workspace git branch (tick
 /// cadence). Catches checkouts done by the agent or in another terminal;
 /// `!git checkout` in the session shell refreshes immediately instead.

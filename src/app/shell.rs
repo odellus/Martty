@@ -3,8 +3,8 @@
 use super::*;
 use std::io::{BufReader, Read, Write};
 use std::sync::mpsc::Sender;
-use std::time::{Duration, Instant};
-use crate::bus::{permission_ask_default_sel, AppEvent, Cmd, CtlEvent, PermissionAskOption, PermissionAskReply, SessionListItem};
+use std::time::Duration;
+use crate::bus::AppEvent;
 
 pub(crate) struct ShellRequest {
     pub(crate) id: u64,

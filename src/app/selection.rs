@@ -1,6 +1,5 @@
 //! selection: extracted verbatim from src/app.rs (Phase 1 split).
 
-use super::*;
 /// One endpoint of a mouse selection in chat-layout coordinates: `line`
 /// indexes the full wrapped layout (`ChatView::lines`), `col` is a display
 /// cell column within the chat pane.

@@ -2,8 +2,8 @@
 
 use super::*;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::{Duration, Instant};
-use crate::transcript::{clamp_str, NoticeLevel, Transcript};
+use std::time::Instant;
+use crate::transcript::Transcript;
 
 /// One non-live session's full state while another tab is viewed (issue
 /// #94). The App's own fields always describe the viewed session; a tab

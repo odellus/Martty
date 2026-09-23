@@ -1,9 +1,6 @@
 //! picker: extracted verbatim from src/app.rs (Phase 1 split).
 
-use super::*;
-use std::collections::{HashMap, HashSet, VecDeque};
-use crate::theme::Theme;
-use crate::transcript::{clamp_str, NoticeLevel, Transcript};
+use crate::transcript::Transcript;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PickerKind {

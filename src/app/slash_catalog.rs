@@ -1,8 +1,6 @@
 //! slash_catalog: extracted verbatim from src/app.rs (Phase 1 split).
 
 use super::*;
-use std::io::{BufReader, Read, Write};
-use crate::theme::Theme;
 
 pub struct SlashCommand {
     pub name: &'static str,

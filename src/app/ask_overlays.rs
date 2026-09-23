@@ -1,8 +1,6 @@
 //! ask_overlays: extracted verbatim from src/app.rs (Phase 1 split).
 
-use super::*;
-use std::sync::mpsc::Sender;
-use crate::bus::{permission_ask_default_sel, AppEvent, Cmd, CtlEvent, PermissionAskOption, PermissionAskReply, SessionListItem};
+use crate::bus::{PermissionAskOption, PermissionAskReply};
 
 /// Overlay for one ACP `session/request_permission` ask.
 pub struct PermissionAskOverlay {
