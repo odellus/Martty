@@ -480,10 +480,52 @@ fn status_slash_fallback_shows_run_state_without_transcript_stats() {
     assert!(!text.contains("- LLM ·"), "{text}");
     assert!(!text.contains("- TTFT avg ·"), "{text}");
     assert!(!text.contains("- rate ·"), "{text}");
+    // A demo never negotiates, so it has no protocol to report. The line is
+    // absent rather than defaulted to `acp` — claiming v1 for a connection that
+    // never spoke it is the failure this guards.
+    assert!(!text.contains("- protocol ·"), "{text}");
     assert!(
         app.transcript.cells.is_empty(),
         "the status facts never land in the scrollback"
     );
+}
+
+#[test]
+fn status_reports_the_negotiated_protocol_when_there_is_one() {
+    let (mut app, ctl, _rx) = test_app();
+    let overlay_text = |app: &App| -> String {
+        let overlay = app.view_overlay.as_ref().expect("/status opens the overlay");
+        let crate::slots::TuiNode::Markdown { text, .. } = &overlay.nodes[0] else {
+            panic!("/status overlay should be one markdown node");
+        };
+        text.clone()
+    };
+
+    app.protocol_tag = Some("acp2");
+    app.run_slash("status", "", &ctl);
+    let text = overlay_text(&app);
+    assert!(text.contains("- protocol · acp2"), "{text}");
+    // It sits with the other connection facts, not after the session block.
+    let acp_at = text.find("- acp · ").expect("- acp line");
+    let protocol_at = text.find("- protocol · ").expect("- protocol line");
+    let session_at = text.find("- session · ").expect("- session line");
+    assert!(acp_at < protocol_at && protocol_at < session_at, "{text}");
+
+    // `/harness` replaces the connection, so the tag has to follow the new
+    // negotiation rather than stick to the first one.
+    app.view_overlay = None;
+    app.handle(
+        AppEvent::Ctl(crate::bus::CtlEvent::Initialized {
+            server: "stub-agent".into(),
+            protocol: "acp",
+        }),
+        &ctl,
+    );
+    assert_eq!(app.protocol_tag, Some("acp"));
+    app.run_slash("status", "", &ctl);
+    let text = overlay_text(&app);
+    assert!(text.contains("- protocol · acp"), "{text}");
+    assert!(!text.contains("- protocol · acp2"), "{text}");
 }
 
 #[test]

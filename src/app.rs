@@ -1555,6 +1555,13 @@ pub struct App {
     shell_worker: Option<ShellWorker>,
     bus_tx: Sender<AppEvent>,
     pub server_info: Option<String>,
+    /// Badge tag of the protocol this connection negotiated — `acp` or `acp2`.
+    /// Connection-scoped, not session-scoped: one negotiated connection serves
+    /// every tab, so it is deliberately NOT parked in `SessionConnection` (a
+    /// tab parked before a `/harness` switch would restore a stale tag).
+    /// `None` until `initialize` returns, and for the demo/legacy paths that
+    /// never negotiate.
+    pub protocol_tag: Option<&'static str>,
     pub connection_error: Option<String>,
     pub needs_redraw: bool,
 }
@@ -1977,6 +1984,7 @@ impl App {
             shell_worker: None,
             bus_tx,
             server_info: None,
+            protocol_tag: None,
             connection_error: None,
             needs_redraw: true,
         };
@@ -3993,8 +4001,9 @@ impl App {
                             "starting runtime".into()
                         };
                     }
-                    CtlEvent::Initialized { server } => {
+                    CtlEvent::Initialized { server, protocol } => {
                         self.server_info = Some(server);
+                        self.protocol_tag = Some(protocol);
                     }
                     CtlEvent::Ready { server } => {
                         self.connection_error = None;
@@ -9060,7 +9069,15 @@ context, subagent lifecycles, token usage (incl. cache hits), end reason.";
             }
             _ => None,
         };
-        let mut text = format!("- state · {state}\n- acp · {acp}\n");
+        // The negotiated stack, when there is one: `acp` or `acp2`. This is the
+        // only place the full fact is spelled out — the meta row carries it as a
+        // badge next to the agent name, and the demo/legacy paths never
+        // negotiate so they have no line at all.
+        let protocol_line = self
+            .protocol_tag
+            .map(|tag| format!("\n- protocol · {tag}"))
+            .unwrap_or_default();
+        let mut text = format!("- state · {state}\n- acp · {acp}{protocol_line}\n");
         if let Some(auth) = auth_line {
             text.push_str(&format!("- auth · {auth}\n"));
         }

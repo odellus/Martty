@@ -885,6 +885,11 @@ fn a_harness_switch_respawns_the_agent_and_the_new_one_answers() {
     // No `--agent` on that command line, so the boot agent came out of
     // settings.json — `stub-default` is the session being up.
     pane.expect(&["stub-default"]);
+    // Both stubs report `agentInfo.name: "stub-agent"`, so the agent's own name
+    // cannot say which stack the union probe landed on. The badge is the only
+    // readable answer, and `acp ·` is not a prefix of `acp2 ·` — the two
+    // needles are genuinely different frames.
+    pane.expect(&["stub-agent acp ·"]);
     let boot = wait_for_frames(&mut pane, log_a, 2);
     assert_eq!(
         methods_of(&boot),
@@ -899,6 +904,9 @@ fn a_harness_switch_respawns_the_agent_and_the_new_one_answers() {
 
     pane.send("/harness stub-v2\r");
     pane.expect(&["⟲ harness → stub (ACP v2)"]);
+    // The badge follows the renegotiation. `pane.text` accumulates every frame
+    // the pane ever drew, so this only passes once a frame carries the v2 tag.
+    pane.expect(&["stub-agent acp2 ·"]);
     let switched = wait_for_frames(&mut pane, log_b, 2);
     assert_eq!(
         methods_of(&switched),

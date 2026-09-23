@@ -2113,14 +2113,35 @@ const HARNESS_IMAGE_SPACE: &str = "\u{2007}\u{2007} ";
 
 fn harness_spans(app: &App) -> Vec<Span<'static>> {
     if !app.session_bound { return Vec::new(); }
+    let caption = Style::default().fg(app.theme.caption);
     let badge = app.harness_badge.as_ref().filter(|badge| badge.session == app.session_id);
-    let content = if app.pet_pixels && badge.is_some_and(|badge| badge.pixels.is_some()) {
-        Some(HARNESS_IMAGE_SPACE.to_string())
-    } else {
-        badge.map(|badge| badge.name.as_str()).or(app.server_info.as_deref())
-            .map(|name| format!("{name} · "))
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if app.pet_pixels && badge.is_some_and(|badge| badge.pixels.is_some()) {
+        spans.push(Span::styled(HARNESS_IMAGE_SPACE.to_string(), caption));
+        // The icon replaces the name, so the tag gets its own segment rather
+        // than riding inside a name that is not being drawn.
+        if let Some(tag) = app.protocol_tag {
+            spans.push(Span::styled(format!("{tag} · "), caption));
+        }
+        return spans;
+    }
+    let Some(name) = badge.map(|badge| badge.name.as_str()).or(app.server_info.as_deref()) else {
+        return spans;
     };
-    content.into_iter().map(|text| Span::styled(text, Style::default().fg(app.theme.caption))).collect()
+    // The negotiated protocol rides with the agent name, spelled the way
+    // `Negotiated::describe()` spells it for `--check-runtime` ("crow-cli acp2").
+    // After `initialize` nothing else distinguishes the two stacks — not the
+    // banner, not the transcript, and not the agent's own name, which a v1 and
+    // a v2 recipe for the same binary report identically. A `/harness` switch
+    // changes exactly this, so it has to be readable without a wire log.
+    spans.push(Span::styled(
+        match app.protocol_tag {
+            Some(tag) => format!("{name} {tag} · "),
+            None => format!("{name} · "),
+        },
+        caption,
+    ));
+    spans
 }
 
 fn layout_harness_icon(app: &mut App, line: &Line, area: Rect) {

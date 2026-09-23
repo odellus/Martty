@@ -2312,7 +2312,13 @@ where
                     .as_ref()
                     .map(|info| info.name.clone())
                     .unwrap_or_else(|| "acp".into());
-                let _ = bus.send(AppEvent::Ctl(CtlEvent::Initialized { server: agent_name.clone() }));
+                // This IS the v1 stack: `negotiate_and_run` only routes
+                // `Protocol::V1` here, the legacy path below speaks v1, and
+                // `negotiated.v1()?` refuses anything else.
+                let _ = bus.send(AppEvent::Ctl(CtlEvent::Initialized {
+                    server: agent_name.clone(),
+                    protocol: Protocol::V1.tag(),
+                }));
 
                 let init_value = serde_json::to_value(&init).unwrap_or(Value::Null);
                 if let Ok(mut surface) = surface.lock() {

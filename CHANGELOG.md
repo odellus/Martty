@@ -21,6 +21,13 @@ All notable changes to this project are documented here. The project follows
   picker opens on the active recipe and shows each one’s command. Switching
   drops the sessions belonging to the agent being replaced, so their transcripts
   stay readable and the viewed tab rebinds to the new connection.
+- The negotiated ACP version is now readable in the painter: the meta row badges
+  the agent name with `acp` or `acp2`, and `/status` reports it as its own line.
+  Nothing else distinguished the two stacks — a v1 and a v2 recipe for the same
+  agent binary report an identical name — so until now the only way to tell what
+  a connection settled on, or that a `/harness` switch changed it, was a wire
+  log. A connection that never negotiates claims no version rather than
+  borrowing `acp`.
 - Show the current tab’s Harness icon before the model, using Registry assets cached locally; fall back to its name while unavailable or on terminals without image support.
 
 - A Chinese and English workflow article on trying Codex and Claude Code in one

@@ -913,6 +913,7 @@ pub(super) async fn connect(
                 let agent_name = negotiated.agent_name();
                 let _ = bus.send(AppEvent::Ctl(CtlEvent::Initialized {
                     server: agent_name.clone(),
+                    protocol: negotiated.protocol.tag(),
                 }));
 
                 let init_value = serde_json::to_value(&init).unwrap_or(Value::Null);

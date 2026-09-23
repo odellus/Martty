@@ -94,8 +94,12 @@ pub enum CtlEvent {
     SessionConnection { session_id: String, connection: SessionConnection },
     /// Spawning + initializing the runtime.
     Starting { runtime: String },
-    /// initialize returned.
-    Initialized { server: String },
+    /// initialize returned. `protocol` is the negotiated stack's badge tag —
+    /// `acp` or `acp2`, from the ACP module's `Protocol::tag`. Carried as a
+    /// `&'static str` so the bus need not name a private module's type, and so
+    /// the painter can show which protocol a connection actually settled on:
+    /// nothing else on the wire distinguishes them after `initialize`.
+    Initialized { server: String, protocol: &'static str },
     /// Initial session setup finished (possibly awaiting authentication).
     Ready { server: String },
     /// Connection/session setup failed, distinct from an individual prompt error.

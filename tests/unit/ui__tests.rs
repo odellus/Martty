@@ -3735,6 +3735,37 @@ fn harness_name_precedes_model_without_registry_image() {
     app.selected_model = Some("example-model".into());
     let text: String = status_right(&app).iter().map(|span| span.content.as_ref()).collect();
     assert!(text.contains("Custom Harness · example-model"), "{text}");
+    // Nothing negotiated, nothing claimed. A connection that never reported a
+    // protocol (demo, legacy attach) must not borrow the v1 tag by default —
+    // `harness_name_precedes_model_without_registry_image` is the pin that it
+    // does not, since a defaulted tag would read "Custom Harness acp · ".
+    assert!(app.protocol_tag.is_none());
+}
+
+#[test]
+fn the_negotiated_protocol_badges_the_harness_name() {
+    let flat = |app: &App| -> String {
+        status_right(app).iter().map(|span| span.content.as_ref()).collect()
+    };
+    let mut app = live_test_app();
+    app.session_bound = true;
+    app.server_info = Some("stub-agent".into());
+    app.selected_model = Some("example-model".into());
+
+    // The agent's own name cannot tell the two stacks apart: a v1 and a v2
+    // recipe for the same binary report the same `agentInfo.name`, and after
+    // `initialize` nothing else on the wire distinguishes them. The tag is the
+    // only readable answer to "which protocol am I actually on", spelled the
+    // way `Negotiated::describe()` spells it for `--check-runtime`.
+    app.protocol_tag = Some("acp");
+    assert!(flat(&app).contains("stub-agent acp · example-model"), "{}", flat(&app));
+    app.protocol_tag = Some("acp2");
+    assert!(flat(&app).contains("stub-agent acp2 · example-model"), "{}", flat(&app));
+
+    // The badge is connection chrome, so an unbound session shows neither name
+    // nor tag rather than a tag floating on its own.
+    app.session_bound = false;
+    assert!(!flat(&app).contains("acp2"), "{}", flat(&app));
 }
 
 #[test]
