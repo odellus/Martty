@@ -3811,3 +3811,82 @@ fn harness_icon_is_session_scoped_and_falls_back_on_non_pixel_terminals() {
     terminal.draw(|frame| draw(frame, &mut app)).unwrap();
     assert!(app.harness_thumb.is_none());
 }
+
+
+/// End-to-end for the scrollback bound: a real frame past the high mark prunes
+/// the oldest rows, keeps the tail on screen, says so in the tip line, and
+/// then leaves the session alone — the hysteresis band, not a per-frame chop.
+#[test]
+fn draw_prunes_scrollback_past_the_high_mark_and_keeps_the_tail() {
+    use crate::events::UiEvent;
+    use crate::transcript::PRUNE_HIGH_ROWS;
+    use crate::transcript::PRUNE_LOW_ROWS;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let theme = Theme::dark();
+    let tone = crate::markdown::ToneMode::Single;
+    let mut app = test_app();
+    app.show_banner = false;
+    let pad = "a row of tool output that wraps when the pane is narrow. ";
+    loop {
+        for _ in 0..24 {
+            let i = app.transcript.cells.len();
+            app.transcript.push_user(format!("prompt {i}"), false);
+            app.transcript.apply(UiEvent::AssistantFinal {
+                session: "dsh-test".into(),
+                text: format!("answer {i}\n"),
+                model: Some("m".into()),
+            });
+            app.transcript.apply(UiEvent::ToolCall {
+                session: "dsh-test".into(),
+                call_id: format!("c{i}"),
+                name: "bash".into(),
+                arguments: format!(r#"{{"command":"turn {i}"}}"#),
+            });
+            app.transcript.apply(UiEvent::ToolResult {
+                session: "dsh-test".into(),
+                call_id: format!("c{i}"),
+                is_error: false,
+                text: (0..40).map(|k| format!("{pad}{k}")).collect::<Vec<_>>().join("\n"),
+                error: None,
+            });
+        }
+        if app.transcript.row_count(&theme, tone, 100, ' ', false) > PRUNE_HIGH_ROWS {
+            break;
+        }
+    }
+    app.transcript.push_user("TAILMARKER".into(), false);
+    let cells_before = app.transcript.cells.len();
+    let rows_before = app.transcript.row_count(&theme, tone, 100, ' ', false);
+    assert!(rows_before > PRUNE_HIGH_ROWS);
+    app.tip = None;
+
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).expect("test terminal");
+    terminal.draw(|f| draw(f, &mut app)).expect("draw frame");
+
+    let cells_after = app.transcript.cells.len();
+    assert!(cells_after < cells_before, "the frame did not prune");
+    let rows_after = app.transcript.row_count(&theme, tone, 100, ' ', false);
+    assert!(rows_after <= PRUNE_LOW_ROWS, "pruned to {rows_after}, above the low mark");
+    let (tip, _) = app.tip.as_ref().expect("the prune should announce itself");
+    assert!(tip.contains("pruned"), "tip {tip:?}");
+
+    // The tail is still on screen, and the oldest prompt is gone.
+    let screen = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>();
+    assert!(screen.contains("TAILMARKER"), "the newest prompt scrolled off");
+    assert!(!screen.contains("prompt 0 "), "the pruned head is still painted");
+
+    // Hysteresis: the very next frame has nothing to do.
+    app.tip = None;
+    terminal.draw(|f| draw(f, &mut app)).expect("draw frame");
+    assert_eq!(app.transcript.cells.len(), cells_after, "pruned twice in a row");
+    assert!(app.tip.is_none(), "a second prune announced itself inside the band");
+}

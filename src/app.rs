@@ -2004,6 +2004,42 @@ impl App {
             .unwrap_or(&self.transcript)
     }
 
+    /// Scrollback bound — the crow_cli.tui `prune_window` hysteresis, fired
+    /// from `draw_chat` with the height `row_count` just measured. Returns the
+    /// rows removed so the caller can re-measure.
+    ///
+    /// Pruning shifts every cell index and bumps the transcript generation, so
+    /// it refuses to run while an index is outstanding anywhere: a steer echo
+    /// waiting to be hidden, or a local shell waiting to write its output into
+    /// its cell. Both are short-lived, and the bound is soft by design — the
+    /// transcript simply runs a little past the high mark until they settle.
+    pub(crate) fn prune_scrollback(&mut self, rows: usize) -> usize {
+        if rows <= crate::transcript::PRUNE_HIGH_ROWS {
+            return 0;
+        }
+        if !self.pending_steer_cells.is_empty() || !self.shell_pending.is_empty() {
+            return 0;
+        }
+        let removed = self.displayed_transcript_mut().prune_oldest(rows);
+        if removed == 0 {
+            return 0;
+        }
+        // The rows vanished above the viewport, so an absolute scroll anchor
+        // has to move up with them or the view jumps to different content.
+        if let Some(top) = &mut self.chat_view.manual_top {
+            *top = top.saturating_sub(removed);
+        }
+        // The ↥ jump cursor indexes cells that just moved; crow-cli drops its
+        // block cursor on prune for the same reason.
+        self.prompt_jump_cell = None;
+        self.show_tip(self.locale.trf(
+            "scrollback pruned — oldest {} rows dropped",
+            "已裁剪滚动区 —— 丢弃最旧的 {} 行",
+            &[removed.to_string()],
+        ));
+        removed
+    }
+
     pub fn displayed_transcript_mut(&mut self) -> &mut Transcript {
         if let Some(index) = self
             .active_subagent

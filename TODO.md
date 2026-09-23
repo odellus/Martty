@@ -786,15 +786,58 @@ resize re-runs markdown+syntect for the whole session. There is **no cap**:
       on every ↥ click to get `layout.users`. It is a click handler, not a frame
       path, so it is a one-off hitch rather than the reported lag — derive it from
       the prefix sum (`line = sums[ci] + 1`, `end = sums[ci + 1]`) when convenient.
-- [ ] **P2 — hysteresis prune** (bounds memory, the O(N) height walk, and the
-      resize rebuild). Mirror `prune_window` exactly: `prune_low_mark` 1500 /
-      `prune_excess` 1000, read from the shared `~/.agents/crow/settings.json`
-      `ui` block (same file crow-cli writes; `runtime::settings_path`) with those
-      defaults. Prune whole cells oldest-first, never an in-flight cell
-      (`Tool { ok: None }` / `Shell { output: None }` / streaming Assistant),
-      fired from the mutation path after `apply()`, not from `layout()`.
-      Re-anchor `app.scroll_up` / `chat_view.manual_top` by the removed-row
-      delta. Make `/clear` the `prune(0, 0)` case.
+- [x] **P2 — hysteresis prune** — DONE. `Transcript::prune_oldest(rows)` drops
+      whole cells oldest-first until the laid-out height is back at or under
+      `PRUNE_LOW_ROWS` (14,000), fired only above `PRUNE_HIGH_ROWS` (15,000).
+      The 1,000-row band is the amortization, exactly as in `prune_window`.
+      Deliberate departures from the original sketch:
+      * **15,000 / 14,000, not crow-cli's 2,500 / 1,500.** P1 made height free
+        at paint time, so this bounds *memory and the resize rebuild*, not frame
+        cost — there is no reason to throw away scrollback at 2,500 rows when a
+        75,000-row session already paints in 16 us. Lots of scrollback, bounded,
+        not ludicrous.
+      * **Constants, not settings keys.** crow-term's `UiSettings` (locale.rs:117)
+        is flat camelCase with no nested `ui` block; adding one for two numbers
+        nobody has asked to tune is not worth it. Promote to
+        `~/.agents/crow/settings.json` if that changes.
+      * **Fired from `draw_chat`, not from `apply()`.** The cut is computed from
+        the prefix-sum table, and the only place the laid-out height is known is
+        the frame that just measured it (`Transcript` carries no width/theme of
+        its own). crow-cli is the same shape — `check_prune` runs from
+        `call_after_refresh`, not from `post()`. The hysteresis band makes it
+        once per 1,000 new rows.
+      * **`/clear` stays its own thing.** Folding it into `prune(0, 0)` would
+        mean routing a reset through the settled-cell gate, which exists to
+        *protect* in-flight work. `/clear` is allowed to drop everything.
+      Gate: pruning shifts every cell index and bumps `gen`, so it refuses to
+      run while an index is outstanding — `Transcript::settled_prefix()` caps the
+      cut below the first unsettled cell (`Tool { ok: None }` /
+      `Shell { output: None }` / streaming `Assistant`|`Reasoning`), and
+      `App::prune_scrollback` additionally waits for `pending_steer_cells` and
+      `shell_pending` to drain. The bound is soft by design: the transcript runs
+      a little past the high mark until they settle. Re-anchoring:
+      `chat_view.manual_top` shifts up by the removed rows (absolute),
+      `scroll_up` is already bottom-relative so it is untouched, and
+      `prompt_jump_cell` is dropped the way crow-cli drops its block cursor.
+      The re-measure after a cut is cheap — `Vec::drain` moves `Cell`s intact, so
+      the survivors keep their `rows`/`render` caches; only the prefix-sum table
+      is rebuilt. Tests: `prune_drops_the_oldest_rows_and_keeps_the_tail_intact`
+      (the surviving tail is byte-identical to `before.lines[removed..]`, owners
+      rebase by the cell delta, prompt spans rebase on both axes),
+      `prune_never_removes_an_unsettled_cell`, `prune_rebases_the_indexes_that_point_into_the_tail`
+      (`tools` / `plan_cell` — a late `ToolResult` updates in place instead of
+      appending an orphan), `prune_bumps_the_generation_so_stale_handles_no_op`,
+      `prune_is_inert_below_the_high_mark`, plus the app-level
+      `prune_scrollback_waits_for_outstanding_cell_indexes`,
+      `prune_scrollback_shifts_the_scroll_anchor_and_drops_the_jump_cursor`,
+      `prune_scrollback_is_inert_below_the_high_mark` and the end-to-end
+      `draw_prunes_scrollback_past_the_high_mark_and_keeps_the_tail` (a real
+      frame prunes, the newest prompt is still painted, the pruned head is not,
+      and the next frame inside the band does nothing).
+      Still open: **parked/subagent transcripts are not pruned** — they are never
+      drawn, so `measure` never runs on them and the bound never reaches them.
+      They cost memory only, not frame time. Prune them on park, or on a timer,
+      if long multi-agent sessions start to hurt.
 - [ ] **P3 — do NOT make `collapse_all` the perf lever.** crow-term defaults
       `expanded: true` for Tool/Reasoning (transcript.rs:156 — "a wall of `▸`
       chevrons makes every turn a clicking exercise"); that is *more* visible

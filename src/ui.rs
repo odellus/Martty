@@ -2520,9 +2520,21 @@ fn draw_chat(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let body_rows = match &banner {
         Some(b) => b.len(),
-        None => app
-            .displayed_transcript_mut()
-            .row_count(&theme, tone, inner.width, spinner, thumbs),
+        None => {
+            let rows = app
+                .displayed_transcript_mut()
+                .row_count(&theme, tone, inner.width, spinner, thumbs);
+            // Scrollback bound: past the high mark the oldest settled cells are
+            // dropped, so re-measure. The hysteresis band makes this once per
+            // 1000 new rows, and the re-measure reads the surviving per-cell
+            // row caches — the drained cells took theirs with them.
+            if app.prune_scrollback(rows) > 0 {
+                app.displayed_transcript_mut()
+                    .row_count(&theme, tone, inner.width, spinner, thumbs)
+            } else {
+                rows
+            }
+        }
     };
     // Active work rides as the transcript's last line — hugging the newest
     // message (no separator; it scrolls with the list). Idle draws nothing.

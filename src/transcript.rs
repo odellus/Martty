@@ -23,6 +23,15 @@ use crate::theme::Theme;
 /// Collapsed tool preview height; click toggles full expansion. Mouse wheel
 /// always belongs to the outer transcript.
 pub const TOOL_VIEWPORT: usize = 4;
+/// Scrollback bound, mirroring crow_cli.tui's `prune_window` hysteresis
+/// (`ui.prune_low_mark` 1500 + `ui.prune_excess` 1000 there). The transcript is
+/// left completely alone until it exceeds `PRUNE_HIGH_ROWS`, then the oldest
+/// settled cells are dropped until it is back under `PRUNE_LOW_ROWS`. The
+/// 1000-row band is the amortization: one prune per 1000 new rows, not one per
+/// frame. The marks sit far above crow-cli's because the windowed layout made
+/// height free at paint time — this bounds memory, not frame cost.
+pub const PRUNE_HIGH_ROWS: usize = 15_000;
+pub const PRUNE_LOW_ROWS: usize = 14_000;
 const COLLAPSED_SHELL_LINES: usize = 12;
 const COLLAPSED_REASONING_PREVIEW: usize = 2;
 /// Thumbnail width in cells (PNG images reserve a box of this many columns).
@@ -616,6 +625,68 @@ impl Transcript {
         self.plan_cell = None;
         self.last_finish = None;
         self.gen = self.gen.wrapping_add(1);
+    }
+
+    /// Drop the oldest cells until the laid-out height is back under
+    /// [`PRUNE_LOW_ROWS`]. `rows` is the height `measure` just reported, so this
+    /// costs no layout of its own. Returns the number of rows removed, or 0
+    /// when nothing was pruned.
+    ///
+    /// Pruning shifts every cell index and bumps [`Self::gen`], so it refuses
+    /// to run while any cell is still in flight — an open stream, a tool
+    /// awaiting its result, a shell awaiting its output. Callers that hold cell
+    /// indexes of their own (steer echoes, pending local shells) must gate on
+    /// those too; see `App::prune_scrollback`.
+    pub fn prune_oldest(&mut self, rows: usize) -> usize {
+        if rows <= PRUNE_HIGH_ROWS {
+            return 0;
+        }
+        // Smallest cut that lands at or under the low mark: `sums` is
+        // non-decreasing, so the first prefix whose removal is enough.
+        let (cut, removed) = {
+            let Some(sums) = self.measure.as_ref().map(|m| &m.sums) else {
+                return 0;
+            };
+            let cut = sums
+                .partition_point(|&s| rows.saturating_sub(s) > PRUNE_LOW_ROWS)
+                .min(self.settled_prefix());
+            (cut, sums.get(cut).copied().unwrap_or(0))
+        };
+        if cut == 0 {
+            return 0;
+        }
+        self.cells.drain(0..cut);
+        for map in [
+            &mut self.open_assistant,
+            &mut self.open_reasoning,
+            &mut self.tools,
+        ] {
+            map.retain(|_, idx| *idx >= cut);
+            for idx in map.values_mut() {
+                *idx -= cut;
+            }
+        }
+        self.plan_cell = self.plan_cell.and_then(|c| c.checked_sub(cut));
+        // The prefix-sum no longer lines up with the cells, and every index
+        // this transcript ever handed out just moved.
+        self.measure = None;
+        self.gen = self.gen.wrapping_add(1);
+        removed
+    }
+
+    /// Count of leading cells that have finished. Pruning never cuts into an
+    /// unsettled cell, so this is the hard ceiling on a cut.
+    fn settled_prefix(&self) -> usize {
+        self.cells
+            .iter()
+            .position(|cell| match &cell.kind {
+                CellKind::Assistant { done, .. } => !*done,
+                CellKind::Reasoning { done, .. } => !*done,
+                CellKind::Tool { ok, .. } => ok.is_none(),
+                CellKind::Shell { output, .. } => output.is_none(),
+                _ => false,
+            })
+            .unwrap_or(self.cells.len())
     }
 
     fn agent_label(&self, session: &str) -> Option<String> {

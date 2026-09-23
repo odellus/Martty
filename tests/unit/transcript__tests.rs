@@ -1051,3 +1051,269 @@ fn measure_cache_survives_mutation_and_resize() {
     assert!(after_hide < hidden, "hiding cells did not shrink the transcript");
     assert_eq!(after_hide, tr.layout(&theme, tone, 80, ' ', false).lines.len());
 }
+
+
+/// Append settled turns — user, assistant, and a tool with a fat result —
+/// until the laid-out height passes `PRUNE_HIGH_ROWS`. Returns the turn count.
+fn fill_past_high_mark(tr: &mut Transcript, width: u16) -> usize {
+    let theme = Theme::dark();
+    let tone = crate::markdown::ToneMode::Single;
+    let pad = "a row of tool output that wraps when the pane is narrow. ";
+    let mut turns = 0;
+    // Measured in chunks, not per turn: the point is the height, and a full
+    // re-sum every turn would make the fixture quadratic.
+    loop {
+        for _ in 0..24 {
+            let i = tr.cells.len();
+            tr.push_user(format!("prompt {i}"), false);
+            tr.apply(UiEvent::AssistantFinal {
+                session: "s".into(),
+                text: format!("answer {i}\n"),
+                model: Some("m".into()),
+            });
+            tr.apply(UiEvent::ToolCall {
+                session: "s".into(),
+                call_id: format!("c{i}"),
+                name: "bash".into(),
+                arguments: format!(r#"{{"command":"turn {i}"}}"#),
+            });
+            tr.apply(UiEvent::ToolResult {
+                session: "s".into(),
+                call_id: format!("c{i}"),
+                is_error: false,
+                text: (0..40).map(|k| format!("{pad}{k}")).collect::<Vec<_>>().join("\n"),
+                error: None,
+            });
+            turns += 1;
+        }
+        if tr.row_count(&theme, tone, width, ' ', false) > PRUNE_HIGH_ROWS {
+            return turns;
+        }
+    }
+}
+
+fn long_transcript(width: u16) -> Transcript {
+    let mut tr = t("s");
+    fill_past_high_mark(&mut tr, width);
+    tr
+}
+
+/// The bound itself: a prune drops the oldest rows, lands at or under the low
+/// mark, and leaves the surviving tail byte-identical to the slice of the
+/// pre-prune layout it came from. Nothing about the visible session changes
+/// except that its beginning is gone.
+#[test]
+fn prune_drops_the_oldest_rows_and_keeps_the_tail_intact() {
+    let theme = Theme::dark();
+    let tone = crate::markdown::ToneMode::Single;
+    let width = 100u16;
+    let mut tr = long_transcript(width);
+    let before = tr.layout(&theme, tone, width, ' ', false);
+    let total = before.lines.len();
+    assert!(total > PRUNE_HIGH_ROWS, "fixture should be over the high mark, got {total}");
+    let cells_before = tr.cells.len();
+
+    let removed = tr.prune_oldest(total);
+    assert!(removed > 0, "nothing was pruned");
+    let cut = cells_before - tr.cells.len();
+    assert!(cut > 0 && cut < cells_before, "cut {cut} of {cells_before} cells");
+
+    let after_rows = tr.row_count(&theme, tone, width, ' ', false);
+    assert!(after_rows <= PRUNE_LOW_ROWS, "pruned to {after_rows}, above the low mark");
+    assert!(
+        after_rows > PRUNE_LOW_ROWS - 400,
+        "pruned to {after_rows}: the hysteresis band should be spent, not overshot"
+    );
+    assert_eq!(after_rows, total - removed, "removed {removed} rows of {total}");
+
+    let after = tr.layout(&theme, tone, width, ' ', false);
+    assert_eq!(after.lines.len(), after_rows);
+    assert_eq!(after.lines, before.lines[removed..], "the tail changed");
+    assert_eq!(after.owners.len(), after.lines.len());
+    // Owners are cell indexes, so they rebase by exactly the cut.
+    let rebased: Vec<Option<usize>> = before.owners[removed..].iter().map(|o| o.map(|i| i - cut)).collect();
+    assert_eq!(after.owners, rebased, "owner indexes did not rebase by {cut}");
+    // Prompt spans rebase on both axes and keep their order.
+    let prompts: Vec<UserPromptLine> = before.users
+        .iter()
+        .filter(|p| p.line >= removed)
+        .map(|p| UserPromptLine { cell: p.cell - cut, line: p.line - removed, end: p.end - removed })
+        .collect();
+    assert_eq!(after.users.len(), prompts.len(), "prompt count");
+    for (got, want) in after.users.iter().zip(&prompts) {
+        assert_eq!(got.cell, want.cell, "prompt cell");
+        assert_eq!(got.line, want.line, "prompt line");
+        assert_eq!(got.end, want.end, "prompt end");
+    }
+}
+
+/// Pruning shifts every index and bumps the generation, so it must never cut
+/// into work that is still in flight — an open tool has a `call_id` pointing
+/// at its cell, and a streaming assistant cell is being appended to.
+#[test]
+fn prune_never_removes_an_unsettled_cell() {
+    let theme = Theme::dark();
+    let tone = crate::markdown::ToneMode::Single;
+    let width = 100u16;
+
+    // An unsettled head blocks the cut entirely.
+    let mut tr = t("s");
+    tr.apply(UiEvent::ToolCall {
+        session: "s".into(),
+        call_id: "stuck".into(),
+        name: "bash".into(),
+        arguments: "{}".into(),
+    });
+    let gen = tr.gen();
+    fill_past_high_mark(&mut tr, width);
+    let total = tr.row_count(&theme, tone, width, ' ', false);
+    let cells = tr.cells.len();
+    assert_eq!(tr.prune_oldest(total), 0, "pruned past an open tool at index 0");
+    assert_eq!(tr.cells.len(), cells, "cells moved");
+    assert_eq!(tr.gen(), gen, "generation bumped for a no-op prune");
+    assert!(matches!(&tr.cells[0].kind, CellKind::Tool { ok: None, .. }));
+
+    // An unsettled tail survives the cut, still open.
+    for unsettled in ["tool", "stream", "shell"] {
+        let mut tr = long_transcript(width);
+        let live = match unsettled {
+            "tool" => {
+                tr.apply(UiEvent::ToolCall {
+                    session: "s".into(),
+                    call_id: "live".into(),
+                    name: "bash".into(),
+                    arguments: r#"{"command":"still running"}"#.into(),
+                });
+                *tr.tools.get("live").expect("open tool indexed")
+            }
+            "stream" => {
+                tr.apply(UiEvent::TextDelta { session: "s".into(), text: "partial".into() });
+                tr.cells.len() - 1
+            }
+            _ => tr.push_shell("sleep 99".into()),
+        };
+        let total = tr.row_count(&theme, tone, width, ' ', false);
+        let cells = tr.cells.len();
+        let removed = tr.prune_oldest(total);
+        assert!(removed > 0, "{unsettled}: nothing pruned");
+        let cut = cells - tr.cells.len();
+        assert!(cut <= live, "{unsettled}: the cut ran past the in-flight cell");
+        let at = live - cut;
+        match unsettled {
+            "tool" => {
+                assert!(matches!(&tr.cells[at].kind, CellKind::Tool { ok: None, .. }));
+                assert_eq!(tr.tools.get("live").copied(), Some(at), "tool index not rebased");
+            }
+            "stream" => {
+                assert!(matches!(&tr.cells[at].kind, CellKind::Assistant { done: false, .. }));
+            }
+            _ => assert!(matches!(&tr.cells[at].kind, CellKind::Shell { output: None, .. })),
+        }
+    }
+}
+
+/// The maps and cursors that index cells have to move with the cut, or the
+/// next event for a surviving cell lands in the wrong place — or appends an
+/// orphan instead of updating in place.
+#[test]
+fn prune_rebases_the_indexes_that_point_into_the_tail() {
+    let theme = Theme::dark();
+    let tone = crate::markdown::ToneMode::Single;
+    let width = 100u16;
+    let mut tr = long_transcript(width);
+    tr.apply(UiEvent::Plan { session: "s".into(), summary: "one; two".into() });
+    let plan_before = tr.plan_cell.expect("plan cell");
+    tr.apply(UiEvent::ToolCall {
+        session: "s".into(),
+        call_id: "live".into(),
+        name: "bash".into(),
+        arguments: r#"{"command":"still running"}"#.into(),
+    });
+    let live_before = *tr.tools.get("live").expect("open tool indexed");
+
+    let total = tr.row_count(&theme, tone, width, ' ', false);
+    let cells = tr.cells.len();
+    assert!(tr.prune_oldest(total) > 0);
+    let cut = cells - tr.cells.len();
+    assert!(cut > 0 && cut < plan_before, "cut {cut} vs plan {plan_before}");
+    assert_eq!(tr.plan_cell, Some(plan_before - cut), "plan cursor not rebased");
+    assert_eq!(tr.tools.get("live").copied(), Some(live_before - cut), "tool index not rebased");
+
+    // A result for the surviving tool writes into its cell rather than
+    // appending an orphan.
+    let len = tr.cells.len();
+    tr.apply(UiEvent::ToolResult {
+        session: "s".into(),
+        call_id: "live".into(),
+        is_error: false,
+        text: "finished\n".into(),
+        error: None,
+    });
+    assert_eq!(tr.cells.len(), len, "a result after a prune appended a cell");
+    match &tr.cells[live_before - cut].kind {
+        CellKind::Tool { ok, result, .. } => {
+            assert_eq!(*ok, Some(true), "result landed somewhere else");
+            assert!(result.contains("finished"), "got {result:?}");
+        }
+        other => panic!("expected the open tool, got {other:?}"),
+    }
+    // Same for the plan cursor: the next Plan replaces in place.
+    tr.apply(UiEvent::Plan { session: "s".into(), summary: "three".into() });
+    assert_eq!(tr.cells.len(), len, "a plan after a prune appended a cell");
+    assert_eq!(tr.plan_cell, Some(plan_before - cut));
+}
+
+/// A prune invalidates every cell index the transcript ever handed out, which
+/// is what the generation is for: handles captured before the cut must no-op
+/// afterwards instead of writing into whatever cell now sits at that index.
+#[test]
+fn prune_bumps_the_generation_so_stale_handles_no_op() {
+    let theme = Theme::dark();
+    let tone = crate::markdown::ToneMode::Single;
+    let width = 100u16;
+    let mut tr = long_transcript(width);
+    let shell = tr.push_shell("ls -la".into());
+    tr.finish_shell(shell, Some(0), "ok\n".into(), tr.gen());
+    let gen = tr.gen();
+    let total = tr.row_count(&theme, tone, width, ' ', false);
+    assert!(tr.prune_oldest(total) > 0);
+    assert_ne!(tr.gen(), gen, "a prune must bump the generation");
+
+    // A local shell finishing against the pre-prune generation must not write
+    // into the cell that happens to occupy its old index now.
+    let late = tr.push_shell("late".into());
+    tr.finish_shell(late, Some(1), "boom\n".into(), gen);
+    match &tr.cells[late].kind {
+        CellKind::Shell { output, .. } => assert!(output.is_none(), "stale finish_shell wrote"),
+        other => panic!("expected a shell, got {other:?}"),
+    }
+    tr.finish_shell(late, Some(1), "boom\n".into(), tr.gen());
+    assert!(matches!(&tr.cells[late].kind, CellKind::Shell { output: Some(_), .. }));
+
+    // Nor may a stale hide handle blank a surviving cell.
+    tr.hide_cells(&[0], gen);
+    assert!(!tr.cells[0].hidden, "stale hide_cells took effect");
+    tr.hide_cells(&[0], tr.gen());
+    assert!(tr.cells[0].hidden);
+}
+
+/// Below the high mark the bound costs nothing: no cut, no generation bump, no
+/// dropped measure cache. This is the hysteresis that keeps a session sitting
+/// near the mark from pruning on every frame.
+#[test]
+fn prune_is_inert_below_the_high_mark() {
+    let theme = Theme::dark();
+    let tone = crate::markdown::ToneMode::Single;
+    let mut tr = fixture();
+    let total = tr.row_count(&theme, tone, 100, ' ', false);
+    assert!(total < PRUNE_HIGH_ROWS);
+    let gen = tr.gen();
+    let cells = tr.cells.len();
+    assert_eq!(tr.prune_oldest(total), 0);
+    assert_eq!(tr.prune_oldest(PRUNE_HIGH_ROWS), 0, "the high mark itself is not over");
+    assert_eq!(tr.cells.len(), cells);
+    assert_eq!(tr.gen(), gen);
+    // The measure cache survived, so the next frame is still cheap.
+    assert!(tr.measure.is_some(), "an inert prune dropped the measure cache");
+    assert_eq!(tr.row_count(&theme, tone, 100, ' ', false), total);
+}
